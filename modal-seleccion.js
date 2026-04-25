@@ -77,10 +77,7 @@
     margin-top: 4px; font-size: 11px; color: #444; text-align: center; line-height: 1.2;
     max-height: 28px; overflow: hidden;
   }
-  .mau-thumb-bloque {
-    position: absolute; bottom: 4px; right: 4px; background: #0f8a4c;
-    color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 3px;
-  }
+  .mau-thumb-bloque { display: none; }
   .mau-thumb-check {
     position: absolute; top: 30px; left: 4px;
     width: 17px; height: 17px; cursor: pointer; z-index: 1;
@@ -125,8 +122,11 @@
 
   .mau-bloques { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
   .mau-bloque {
-    border: 1px solid #d0d4d8; border-radius: 6px; padding: 8px; background: #fafbfc;
-    font-size: 12px;
+    border: 2px solid #d0d4d8; border-radius: 6px; padding: 8px; background: #fafbfc;
+    font-size: 12px; transition: border-color .15s, background .15s;
+  }
+  .mau-bloque.activo {
+    border-color: #1e66d1; background: #eef4ff;
   }
   .mau-bloque header {
     display: flex; justify-content: space-between; align-items: center; gap: 6px;
@@ -274,6 +274,7 @@
       const div = document.createElement("div");
       div.className = "mau-thumb";
       div.dataset.pagina = String(i);
+      div.dataset.label = [etiqueta, meta].filter(Boolean).join(" — ") || "Sin identificar";
       div.innerHTML = `<span class="mau-thumb-num">${i}</span>`;
       div.appendChild(canvas);
 
@@ -315,17 +316,30 @@
 
   let ultimoClic = null;
   function manejarClicThumb(ev, pagina) {
+    const bloqueDeEstaPagina = ctx.bloques.find((b) => b.paginas.includes(pagina));
+
     if (ev.shiftKey && ultimoClic != null) {
       const desde = Math.min(ultimoClic, pagina);
       const hasta = Math.max(ultimoClic, pagina);
       for (let i = desde; i <= hasta; i++) ctx.seleccion.add(i);
     } else if (ev.ctrlKey || ev.metaKey) {
-      if (ctx.seleccion.has(pagina)) ctx.seleccion.delete(pagina);
-      else ctx.seleccion.add(pagina);
+      if (bloqueDeEstaPagina) {
+        const todasSel = bloqueDeEstaPagina.paginas.every((p) => ctx.seleccion.has(p));
+        for (const p of bloqueDeEstaPagina.paginas) {
+          if (todasSel) ctx.seleccion.delete(p); else ctx.seleccion.add(p);
+        }
+      } else {
+        if (ctx.seleccion.has(pagina)) ctx.seleccion.delete(pagina);
+        else ctx.seleccion.add(pagina);
+      }
       ultimoClic = pagina;
     } else {
       ctx.seleccion.clear();
-      ctx.seleccion.add(pagina);
+      if (bloqueDeEstaPagina) {
+        for (const p of bloqueDeEstaPagina.paginas) ctx.seleccion.add(p);
+      } else {
+        ctx.seleccion.add(pagina);
+      }
       ultimoClic = pagina;
     }
     refrescarSeleccionVisual();
@@ -356,17 +370,33 @@
       const chk = el.querySelector(".mau-thumb-check");
       if (chk) chk.checked = esSel;
 
-      // mostrar etiqueta de bloque asignado
-      const bloque = ctx.bloques.find((b) => b.paginas.includes(pag));
-      const old = el.querySelector(".mau-thumb-bloque");
-      if (old) old.remove();
+      // mostrar etiqueta de bloque asignado en el tag principal
+      const bloqueIdx = ctx.bloques.findIndex((b) => b.paginas.includes(pag));
+      const bloque = bloqueIdx !== -1 ? ctx.bloques[bloqueIdx] : null;
       el.classList.toggle("asignada", !!bloque);
-      if (bloque) {
-        const tag = document.createElement("span");
-        tag.className = "mau-thumb-bloque";
-        tag.textContent = bloque.nombre.slice(0, 18);
-        el.appendChild(tag);
+      const tagEl = el.querySelector(".mau-thumb-tag");
+      if (tagEl) {
+        if (bloque) {
+          const num = bloqueIdx + 1;
+          const nombre = bloque.nombre && bloque.nombre !== `Bloque ${num}` ? ` — ${bloque.nombre}` : "";
+          tagEl.textContent = `Bloque ${num}${nombre}`;
+          tagEl.style.color = "#0f8a4c";
+          tagEl.style.fontWeight = "600";
+        } else {
+          tagEl.textContent = el.dataset.label || "Sin identificar";
+          tagEl.style.color = "";
+          tagEl.style.fontWeight = "";
+        }
       }
+    });
+
+    // resaltar bloques en el panel derecho cuyos pages están en la selección
+    ctx.root.querySelectorAll(".mau-bloque").forEach((el) => {
+      const idStr = el.querySelector("button[data-borrar]")?.dataset.borrar;
+      if (!idStr) return;
+      const b = ctx.bloques.find((x) => x.id === parseInt(idStr, 10));
+      const activo = b && b.paginas.some((p) => ctx.seleccion.has(p));
+      el.classList.toggle("activo", !!activo);
     });
   }
 
