@@ -195,11 +195,13 @@
   const ctx = {
     file: null,
     numPaginas: 0,
-    textosPorPagina: [], // meta de Claude por página
+    textosPorPagina: [],
     seleccion: new Set(),
-    bloques: [], // [{id, nombre, paginas[], requerimientos[], meta}]
+    bloques: [],
     nextId: 1,
     requerimientos: [],
+    bloquesIniciales: [],
+    nombrePatron: "",
     onConfirm: null,
     root: null
   };
@@ -212,6 +214,8 @@
     ctx.bloques = [];
     ctx.nextId = 1;
     ctx.requerimientos = [];
+    ctx.bloquesIniciales = [];
+    ctx.nombrePatron = "";
     ctx.onConfirm = null;
     if (ctx.root) {
       ctx.root.remove();
@@ -219,12 +223,14 @@
     }
   }
 
-  async function abrir({ file, requerimientos, textosPorPagina, onConfirm }) {
+  async function abrir({ file, requerimientos, textosPorPagina, bloquesIniciales, nombrePatron, onConfirm }) {
     if (!file) throw new Error("Falta el archivo.");
     inyectarCss();
     ctx.file = file;
     ctx.requerimientos = Array.isArray(requerimientos) ? requerimientos : [];
     ctx.textosPorPagina = Array.isArray(textosPorPagina) ? textosPorPagina : [];
+    ctx.bloquesIniciales = Array.isArray(bloquesIniciales) ? bloquesIniciales : [];
+    ctx.nombrePatron = nombrePatron || "";
     ctx.onConfirm = typeof onConfirm === "function" ? onConfirm : null;
     ctx.seleccion = new Set();
     ctx.bloques = [];
@@ -233,6 +239,19 @@
     renderShell();
     await renderThumbnails();
     renderPanelDerecho();
+    if (ctx.bloquesIniciales.length) cargarBloquesIniciales();
+  }
+
+  function cargarBloquesIniciales() {
+    ctx.bloques = ctx.bloquesIniciales.map((b) => ({
+      id: ctx.nextId++,
+      nombre: b.nombre || "Bloque",
+      paginas: [...(b.paginas || [])],
+      requerimientos: [...(b.requerimientos || [])],
+      meta: b.meta || {}
+    }));
+    renderBloques();
+    refrescarSeleccionVisual();
   }
 
   function renderShell() {
@@ -515,7 +534,11 @@
 
   function renderPanelDerecho() {
     const right = ctx.root.querySelector("#mau-modal-right");
+    const tagPatron = ctx.nombrePatron
+      ? `<p style="font-size:11px;color:#38bdf8;margin:0 0 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ctx.nombrePatron)}">📋 ${escapeHtml(ctx.nombrePatron)}</p>`
+      : "";
     right.innerHTML = `
+      ${tagPatron}
       <p class="mau-right-title">Selección</p>
       <div class="mau-sel-info" id="mau-sel-info">Ninguna página seleccionada</div>
       <button class="mau-crear-bloque" id="mau-crear-bloque" disabled>+ Crear bloque con selección</button>

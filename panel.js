@@ -38,7 +38,6 @@
     sabanaTablaBody: document.getElementById("mau-sabana-tabla-body"),
     sabanaConfirmar: document.getElementById("mau-sabana-confirmar"),
     sabanaCancelar: document.getElementById("mau-sabana-cancelar"),
-    verPatrones: document.getElementById("mau-ver-patrones"),
     toast: document.getElementById("mau-toast")
   };
 
@@ -52,7 +51,6 @@
   ui.detectar.addEventListener("click", detectarRequerimientosPendientes);
   ui.procesar.addEventListener("click", procesarTodo);
   if (ui.abrirMapeo) ui.abrirMapeo.addEventListener("click", abrirGestorMapeo);
-  if (ui.verPatrones) ui.verPatrones.addEventListener("click", abrirGestorPatrones);
   if (ui.docUnico) ui.docUnico.addEventListener("click", async () => {
     const file = estado.sabanaPendiente;
     if (!file) return;
@@ -2283,143 +2281,99 @@
    * Abre el gestor de mapeo. Si hay mapeos guardados los muestra.
    * Si no hay, o el usuario elige "nuevo", abre el flujo de sábana para crear uno.
    */
-  async function abrirGestorPatrones() {
-    const patrones = (await window.MAUStorage.leerPatronesSabana()) || [];
+  function pedirPdfAlUsuario() {
+    return new Promise((resolve) => {
+      const inp = document.createElement("input");
+      inp.type = "file";
+      inp.accept = "application/pdf,.pdf";
+      inp.addEventListener("change", () => resolve(inp.files?.[0] || null));
+      inp.addEventListener("cancel", () => resolve(null));
+      inp.click();
+    });
+  }
 
-    const overlay = document.createElement("div");
-    overlay.className = "mau-confirm";
-    const box = document.createElement("div");
-    box.className = "mau-confirm-box";
-    box.style.cssText = "width:580px;max-height:80vh;display:flex;flex-direction:column;";
+  function elegirPatronUI(patrones) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "mau-confirm";
+      const box = document.createElement("div");
+      box.className = "mau-confirm-box";
+      box.style.cssText = "width:460px;max-height:70vh;display:flex;flex-direction:column;padding:0;overflow:hidden;";
 
-    const titulo = document.createElement("div");
-    titulo.style.cssText = "font-weight:700;font-size:16px;margin-bottom:14px;flex-shrink:0;";
-    titulo.textContent = "Patrones guardados";
-    box.appendChild(titulo);
+      const hdr = document.createElement("div");
+      hdr.style.cssText = "padding:14px 18px 12px;border-bottom:1px solid rgba(148,163,184,.15);font-weight:700;font-size:15px;flex-shrink:0;";
+      hdr.textContent = "¿Con qué mapeo abrís?";
+      box.appendChild(hdr);
 
-    const lista = document.createElement("div");
-    lista.style.cssText = "overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:10px;";
+      const lista = document.createElement("div");
+      lista.style.cssText = "overflow-y:auto;flex:1;padding:10px 14px;display:flex;flex-direction:column;gap:7px;";
 
-    const renderLista = (items) => {
-      lista.innerHTML = "";
-      if (!items.length) {
-        lista.innerHTML = `<div style="font-size:13px;color:#94a3b8;text-align:center;padding:20px 0;">No hay patrones guardados todavía.</div>`;
-        return;
-      }
-      items.forEach((p, idx) => {
-        const tieneTypes = Array.isArray(p.firmaTipos) && p.firmaTipos.length > 0;
-        const totalPag = p.totalPaginas || (tieneTypes ? p.firmaTipos.length : 0);
-        const nBloques = Array.isArray(p.bloquesModal) ? p.bloquesModal.length : 0;
-        const resumen = [
-          totalPag ? `${totalPag} pág.` : null,
-          nBloques ? `${nBloques} bloque(s)` : null,
-          tieneTypes ? p.firmaTipos.join(" · ") : "sin firma de tipos"
-        ].filter(Boolean).join(" — ");
+      const mkBtn = (label, sub, onClick) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.style.cssText = "background:rgba(148,163,184,.07);border:1px solid rgba(148,163,184,.18);border-radius:8px;padding:10px 14px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:2px;width:100%;";
+        btn.innerHTML = `<span style="font-weight:600;font-size:13px;color:#e2e8f0;">${escapeHtml(label)}</span>${sub ? `<span style="font-size:11px;color:#64748b;">${escapeHtml(sub)}</span>` : ""}`;
+        btn.addEventListener("mouseenter", () => { btn.style.borderColor = "rgba(56,189,248,.4)"; btn.style.background = "rgba(56,189,248,.07)"; });
+        btn.addEventListener("mouseleave", () => { btn.style.borderColor = "rgba(148,163,184,.18)"; btn.style.background = "rgba(148,163,184,.07)"; });
+        btn.addEventListener("click", () => { overlay.remove(); onClick(); });
+        return btn;
+      };
 
-        const row = document.createElement("div");
-        row.style.cssText = "background:rgba(148,163,184,0.07);border:1px solid rgba(148,163,184,0.15);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;";
-
-        const fila1 = document.createElement("div");
-        fila1.style.cssText = "display:flex;align-items:center;gap:8px;";
-
-        const inp = document.createElement("input");
-        inp.type = "text";
-        inp.value = p.nombre || "";
-        inp.style.cssText = "flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(148,163,184,0.25);border-radius:6px;padding:5px 9px;color:#e2e8f0;font-size:13px;font-weight:600;";
-        inp.title = "Editá el nombre y presioná Enter para guardar";
-        inp.addEventListener("keydown", async (e) => {
-          if (e.key !== "Enter") return;
-          inp.blur();
-          const todos = (await window.MAUStorage.leerPatronesSabana()) || [];
-          if (todos[idx]) {
-            todos[idx].nombre = inp.value.trim() || todos[idx].nombre;
-            await window.MAUStorage.guardarPatronesSabana(todos);
-            mostrarToast("Nombre actualizado.");
-          }
-        });
-
-        const btnBorrar = document.createElement("button");
-        btnBorrar.type = "button";
-        btnBorrar.textContent = "🗑";
-        btnBorrar.title = "Eliminar este patrón";
-        btnBorrar.style.cssText = "background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#f87171;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:14px;flex-shrink:0;";
-        btnBorrar.addEventListener("click", async () => {
-          if (!confirm(`¿Eliminás el patrón "${p.nombre || idx + 1}"? Esta acción no se puede deshacer.`)) return;
-          const todos = (await window.MAUStorage.leerPatronesSabana()) || [];
-          todos.splice(idx, 1);
-          await window.MAUStorage.guardarPatronesSabana(todos);
-          mostrarToast("Patrón eliminado.");
-          overlay.remove();
-          abrirGestorPatrones();
-        });
-
-        fila1.appendChild(inp);
-        fila1.appendChild(btnBorrar);
-        row.appendChild(fila1);
-
-        const info = document.createElement("div");
-        info.style.cssText = "font-size:11px;color:#64748b;";
-        info.textContent = resumen;
-        row.appendChild(info);
-
-        if (nBloques) {
-          const bloquesTxt = p.bloquesModal.map((b) =>
-            `${b.nombre || "sin nombre"} (p. ${(b.paginas || []).join(",")}) → ${(b.requerimientos || []).join(", ") || "sin req."}`
-          ).join("\n");
-          const detalle = document.createElement("pre");
-          detalle.style.cssText = "font-size:10px;color:#475569;background:rgba(0,0,0,0.15);border-radius:4px;padding:5px 8px;margin:0;overflow-x:auto;white-space:pre-wrap;word-break:break-all;";
-          detalle.textContent = bloquesTxt;
-          row.appendChild(detalle);
-        }
-
-        lista.appendChild(row);
+      patrones.forEach((p) => {
+        const n = Array.isArray(p.bloquesModal) ? p.bloquesModal.length : 0;
+        const pags = p.totalPaginas || (Array.isArray(p.firmaTipos) ? p.firmaTipos.length : 0);
+        const sub = [pags ? `${pags} pág.` : null, n ? `${n} bloque(s)` : null].filter(Boolean).join(" · ");
+        lista.appendChild(mkBtn(p.nombre || "(sin nombre)", sub, () => resolve(p)));
       });
-    };
+      lista.appendChild(mkBtn("➕ Nuevo (empezar desde cero)", "", () => resolve(null)));
 
-    renderLista(patrones);
-    box.appendChild(lista);
-
-    const btnCerrar = document.createElement("button");
-    btnCerrar.type = "button";
-    btnCerrar.textContent = "Cerrar";
-    btnCerrar.style.cssText = "margin-top:14px;padding:10px;border:0;border-radius:8px;background:rgba(148,163,184,0.12);color:#94a3b8;font-size:14px;font-weight:600;cursor:pointer;flex-shrink:0;";
-    btnCerrar.addEventListener("click", () => overlay.remove());
-    box.appendChild(btnCerrar);
-
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+      box.appendChild(lista);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") { overlay.remove(); resolve(null); } });
+    });
   }
 
   async function abrirGestorMapeo() {
-    await iniciarCreacionMapeo();
-  }
-
-  async function iniciarCreacionMapeo() {
-    const file = estado.sabanaPendiente;
+    // 1. Asegurar PDF
+    let file = estado.sabanaPendiente;
     if (!file) {
-      mostrarToast("Soltá un PDF en el panel para empezar a crear un mapeo.");
-      ui.dropzone.classList.add("mau-over");
-      setTimeout(() => ui.dropzone.classList.remove("mau-over"), 2000);
-      return;
+      file = await pedirPdfAlUsuario();
+      if (!file) return;
+      estado.sabanaPendiente = file;
+      mostrarSeccionSabana(true);
     }
+
     if (!window.MAUModalSeleccion) {
       mostrarToast("Modal no disponible. Recargá la extensión.");
       return;
     }
-
     if (!estado.requerimientos.length) await detectarRequerimientosPendientes();
 
-    const nombrePatron = `mapeo-${new Date().toISOString().slice(0, 10)}-${file.name.replace(/\.pdf$/i, "")}`;
+    // 2. Elegir patrón a pre-cargar
+    const patrones = (await window.MAUStorage.leerPatronesSabana()) || [];
+    let patronElegido = null;
+    if (patrones.length === 1) {
+      patronElegido = patrones[0];
+    } else if (patrones.length > 1) {
+      patronElegido = await elegirPatronUI(patrones);
+    }
 
+    const bloquesIniciales = patronElegido?.bloquesModal || [];
+    const nombreBase = patronElegido?.nombre
+      || `mapeo-${new Date().toISOString().slice(0, 10)}-${file.name.replace(/\.pdf$/i, "")}`;
+
+    // 3. Abrir modal grande con bloques pre-cargados
     await window.MAUModalSeleccion.abrir({
       file,
       requerimientos: estado.requerimientos,
+      bloquesIniciales,
+      nombrePatron: patronElegido?.nombre || "",
       onConfirm: async (bloques, numPaginas) => {
         try {
           await window.MAUStorage.guardarPatronSabana({
-            nombre: nombrePatron,
-            firmaTipos: [],
+            nombre: nombreBase,
+            firmaTipos: patronElegido?.firmaTipos || [],
             totalPaginas: numPaginas || 0,
             bloquesModal: bloques.map((b) => ({
               nombre: b.nombre,
@@ -2427,7 +2381,7 @@
               requerimientos: b.requerimientos
             }))
           });
-          mostrarToast(`Mapeo guardado: ${bloques.length} bloque(s). Se aplicará automáticamente la próxima vez.`);
+          mostrarToast(`Mapeo guardado: ${bloques.length} bloque(s).`);
         } catch (err) {
           console.warn("[MAU] No se pudo guardar el patrón:", err);
         }
