@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "DocAutomatización",
+  "description": "Automatiza la carga de documentos pendientes en controldocumentario.com",
+  "version": "1.0.0",
+  "permissions": ["activeTab", "storage", "scripting", "alarms", "tabs"],
+  "host_permissions": ["https://controldocumentario.com/*", "https://api.anthropic.com/*", "https://api.telegram.org/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://controldocumentario.com/*"],
+      "js": ["page-inject-confirm-patch.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://controldocumentario.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://controldocumentario.com/*"],
+      "js": ["vencimientos.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["panel.html", "panel.css", "panel.js", "matcher.js", "storage.js", "pdf-splitter.js", "ocr-engine.js", "modal-seleccion.js", "page-inject-confirm-patch.js", "vencimientos.js"],
+      "matches": ["https://controldocumentario.com/*"]
+    }
+  ]
+}

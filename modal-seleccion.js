@@ -1,0 +1,488 @@
+/**
+ * Modal de selección manual con miniaturas.
+ *
+ * API pública:
+ *   window.MAUModalSeleccion.abrir({
+ *     file: File,
+ *     requerimientos: [{ nombre: string, link?: HTMLElement }],
+ *     textosPorPagina?: Array<{pagina, id, etiqueta, cuil, apellido, nombre, patente, periodo}>,
+ *     onConfirm: async (bloques) => void
+ *   });
+ *
+ * Cada bloque devuelto tiene la forma:
+ *   { nombre, paginas:number[], requerimientos:string[], meta:{cuil,apellido,nombre,patente,periodo} }
+ */
+(function () {
+  const CSS = `
+  .mau-modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    z-index: 2147483000; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  }
+  .mau-modal {
+    background: #fff; width: 95vw; height: 92vh; border-radius: 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
+  }
+  .mau-modal-header {
+    padding: 12px 18px; background: #0f8a4c; color: #fff;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .mau-modal-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .mau-modal-header button {
+    background: transparent; color: #fff; border: 1px solid #fff;
+    border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 13px;
+  }
+  .mau-modal-body { flex: 1; display: flex; overflow: hidden; }
+  .mau-modal-left {
+    width: 70%; padding: 14px; overflow-y: auto; background: #f4f5f7;
+    border-right: 1px solid #d0d4d8;
+  }
+  .mau-modal-right {
+    width: 30%; padding: 14px; overflow-y: auto; background: #fff;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .mau-modal-footer {
+    padding: 10px 18px; border-top: 1px solid #d0d4d8; background: #f9f9fa;
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+  .mau-modal-footer button {
+    padding: 8px 16px; border-radius: 5px; border: 1px solid #c0c4c8;
+    background: #fff; cursor: pointer; font-size: 13px;
+  }
+  .mau-modal-footer .mau-btn-primary {
+    background: #0f8a4c; color: #fff; border-color: #0f8a4c; font-weight: 600;
+  }
+  .mau-modal-footer button:disabled { opacity: .55; cursor: not-allowed; }
+
+  .mau-thumbs {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .mau-thumb {
+    background: #fff; border: 2px solid #d0d4d8; border-radius: 6px;
+    padding: 6px; cursor: pointer; position: relative; user-select: none;
+    display: flex; flex-direction: column; align-items: center;
+    transition: border-color .1s, background .1s;
+  }
+  .mau-thumb:hover { border-color: #87b3ff; }
+  .mau-thumb.sel { border-color: #1e66d1; background: #e8f0ff; }
+  .mau-thumb.asignada { opacity: .65; }
+  .mau-thumb canvas { max-width: 100%; height: auto; display: block; }
+  .mau-thumb-num {
+    position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,.72);
+    color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
+  }
+  .mau-thumb-tag {
+    margin-top: 4px; font-size: 11px; color: #444; text-align: center; line-height: 1.2;
+    max-height: 28px; overflow: hidden;
+  }
+  .mau-thumb-bloque {
+    position: absolute; bottom: 4px; right: 4px; background: #0f8a4c;
+    color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 3px;
+  }
+
+  .mau-right-title { font-weight: 600; font-size: 13px; margin: 0; color: #222; }
+  .mau-sel-info { font-size: 12px; color: #555; }
+  .mau-crear-bloque {
+    padding: 8px 12px; border-radius: 5px; border: 1px solid #0f8a4c;
+    background: #0f8a4c; color: #fff; cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  .mau-crear-bloque:disabled { background: #aacdb6; border-color: #aacdb6; cursor: not-allowed; }
+
+  .mau-bloques { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .mau-bloque {
+    border: 1px solid #d0d4d8; border-radius: 6px; padding: 8px; background: #fafbfc;
+    font-size: 12px;
+  }
+  .mau-bloque header {
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    margin-bottom: 4px;
+  }
+  .mau-bloque header strong { font-size: 12px; color: #0f8a4c; }
+  .mau-bloque header button {
+    background: transparent; border: none; color: #c33; cursor: pointer; font-size: 14px;
+    padding: 0 4px;
+  }
+  .mau-bloque input[type=text] {
+    width: 100%; padding: 4px 6px; border: 1px solid #c0c4c8; border-radius: 3px;
+    font-size: 12px; margin-bottom: 4px;
+  }
+  .mau-bloque .mau-paginas { font-size: 11px; color: #555; margin-bottom: 4px; }
+  .mau-bloque .mau-meta {
+    font-size: 11px; color: #666; margin-bottom: 4px; padding: 3px 5px;
+    background: #f0f0f0; border-radius: 3px;
+  }
+  .mau-bloque label { font-size: 11px; color: #333; display: block; margin-top: 3px; }
+  .mau-req-list {
+    max-height: 130px; overflow-y: auto; border: 1px solid #d0d4d8; border-radius: 4px;
+    padding: 4px; background: #fff;
+  }
+  .mau-req-list label {
+    display: flex; align-items: center; gap: 4px; padding: 2px 0;
+    cursor: pointer; font-size: 11px;
+  }
+  .mau-req-list input[type=checkbox] { margin: 0; }
+  `;
+
+  let cssInyectado = false;
+  function inyectarCss() {
+    if (cssInyectado) return;
+    const st = document.createElement("style");
+    st.textContent = CSS;
+    document.head.appendChild(st);
+    cssInyectado = true;
+  }
+
+  // --------- estado del modal ---------
+  const ctx = {
+    file: null,
+    numPaginas: 0,
+    textosPorPagina: [], // meta de Claude por página
+    seleccion: new Set(),
+    bloques: [], // [{id, nombre, paginas[], requerimientos[], meta}]
+    nextId: 1,
+    requerimientos: [],
+    onConfirm: null,
+    root: null
+  };
+
+  function limpiar() {
+    ctx.file = null;
+    ctx.numPaginas = 0;
+    ctx.textosPorPagina = [];
+    ctx.seleccion.clear();
+    ctx.bloques = [];
+    ctx.nextId = 1;
+    ctx.requerimientos = [];
+    ctx.onConfirm = null;
+    if (ctx.root) {
+      ctx.root.remove();
+      ctx.root = null;
+    }
+  }
+
+  async function abrir({ file, requerimientos, textosPorPagina, onConfirm }) {
+    if (!file) throw new Error("Falta el archivo.");
+    inyectarCss();
+    ctx.file = file;
+    ctx.requerimientos = Array.isArray(requerimientos) ? requerimientos : [];
+    ctx.textosPorPagina = Array.isArray(textosPorPagina) ? textosPorPagina : [];
+    ctx.onConfirm = typeof onConfirm === "function" ? onConfirm : null;
+    ctx.seleccion = new Set();
+    ctx.bloques = [];
+    ctx.nextId = 1;
+
+    renderShell();
+    await renderThumbnails();
+    renderPanelDerecho();
+  }
+
+  function renderShell() {
+    const root = document.createElement("div");
+    root.className = "mau-modal-bg";
+    root.innerHTML = `
+      <div class="mau-modal">
+        <header class="mau-modal-header">
+          <h2>Dividir y asignar — ${escapeHtml(ctx.file.name)}</h2>
+          <button data-accion="cerrar">Cerrar ✕</button>
+        </header>
+        <div class="mau-modal-body">
+          <div class="mau-modal-left">
+            <div class="mau-thumbs" id="mau-modal-thumbs"></div>
+          </div>
+          <aside class="mau-modal-right" id="mau-modal-right"></aside>
+        </div>
+        <footer class="mau-modal-footer">
+          <button data-accion="cancelar">Cancelar</button>
+          <button class="mau-btn-primary" data-accion="confirmar">Confirmar y subir</button>
+        </footer>
+      </div>
+    `;
+    document.body.appendChild(root);
+    ctx.root = root;
+
+    root.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-accion]");
+      if (!btn) return;
+      const accion = btn.dataset.accion;
+      if (accion === "cerrar" || accion === "cancelar") limpiar();
+      if (accion === "confirmar") confirmar();
+    });
+  }
+
+  async function renderThumbnails() {
+    const cont = ctx.root.querySelector("#mau-modal-thumbs");
+    cont.textContent = "Cargando miniaturas…";
+
+    if (!window.pdfjsLib) {
+      if (window.MAUOcrEngine?.asegurarPdfJs) await window.MAUOcrEngine.asegurarPdfJs();
+    }
+    const data = new Uint8Array(await ctx.file.arrayBuffer());
+    const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+    ctx.numPaginas = pdf.numPages;
+    cont.textContent = "";
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 0.35 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const ctx2d = canvas.getContext("2d");
+      ctx2d.fillStyle = "#fff";
+      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx2d, viewport }).promise;
+
+      const info = ctx.textosPorPagina.find((t) => t.pagina === i) || {};
+      const etiqueta = info.etiqueta || info.texto || "";
+      const meta = [info.apellido, info.patente].filter(Boolean).join(" · ");
+
+      const div = document.createElement("div");
+      div.className = "mau-thumb";
+      div.dataset.pagina = String(i);
+      div.innerHTML = `<span class="mau-thumb-num">${i}</span>`;
+      div.appendChild(canvas);
+      const tag = document.createElement("div");
+      tag.className = "mau-thumb-tag";
+      tag.textContent = [etiqueta, meta].filter(Boolean).join(" — ") || "Sin identificar";
+      div.appendChild(tag);
+
+      div.addEventListener("click", (ev) => manejarClicThumb(ev, i));
+      cont.appendChild(div);
+    }
+    try { pdf.destroy(); } catch (_e) { /* noop */ }
+  }
+
+  let ultimoClic = null;
+  function manejarClicThumb(ev, pagina) {
+    if (ev.shiftKey && ultimoClic != null) {
+      const desde = Math.min(ultimoClic, pagina);
+      const hasta = Math.max(ultimoClic, pagina);
+      for (let i = desde; i <= hasta; i++) ctx.seleccion.add(i);
+    } else if (ev.ctrlKey || ev.metaKey) {
+      if (ctx.seleccion.has(pagina)) ctx.seleccion.delete(pagina);
+      else ctx.seleccion.add(pagina);
+      ultimoClic = pagina;
+    } else {
+      ctx.seleccion.clear();
+      ctx.seleccion.add(pagina);
+      ultimoClic = pagina;
+    }
+    refrescarSeleccionVisual();
+    actualizarInfoSeleccion();
+  }
+
+  function refrescarSeleccionVisual() {
+    ctx.root.querySelectorAll(".mau-thumb").forEach((el) => {
+      const pag = parseInt(el.dataset.pagina, 10);
+      el.classList.toggle("sel", ctx.seleccion.has(pag));
+
+      // mostrar etiqueta de bloque asignado
+      const bloque = ctx.bloques.find((b) => b.paginas.includes(pag));
+      const old = el.querySelector(".mau-thumb-bloque");
+      if (old) old.remove();
+      el.classList.toggle("asignada", !!bloque);
+      if (bloque) {
+        const tag = document.createElement("span");
+        tag.className = "mau-thumb-bloque";
+        tag.textContent = bloque.nombre.slice(0, 18);
+        el.appendChild(tag);
+      }
+    });
+  }
+
+  function actualizarInfoSeleccion() {
+    const info = ctx.root.querySelector("#mau-sel-info");
+    if (!info) return;
+    const n = ctx.seleccion.size;
+    info.textContent = n === 0 ? "Ninguna página seleccionada" : `${n} página(s) seleccionada(s): ${[...ctx.seleccion].sort((a,b)=>a-b).join(", ")}`;
+    const btn = ctx.root.querySelector("#mau-crear-bloque");
+    if (btn) btn.disabled = n === 0;
+  }
+
+  function renderPanelDerecho() {
+    const right = ctx.root.querySelector("#mau-modal-right");
+    right.innerHTML = `
+      <p class="mau-right-title">Selección</p>
+      <div class="mau-sel-info" id="mau-sel-info">Ninguna página seleccionada</div>
+      <button class="mau-crear-bloque" id="mau-crear-bloque" disabled>+ Crear bloque con selección</button>
+      <p class="mau-right-title" style="margin-top:10px;">Bloques armados</p>
+      <div class="mau-bloques" id="mau-bloques-list"></div>
+    `;
+    right.querySelector("#mau-crear-bloque").addEventListener("click", crearBloqueConSeleccion);
+    actualizarInfoSeleccion();
+    renderBloques();
+  }
+
+  function crearBloqueConSeleccion() {
+    if (!ctx.seleccion.size) return;
+    const paginas = [...ctx.seleccion].sort((a, b) => a - b);
+
+    // Sacar estas páginas de cualquier bloque previo
+    for (const b of ctx.bloques) {
+      b.paginas = b.paginas.filter((p) => !paginas.includes(p));
+    }
+    for (let i = ctx.bloques.length - 1; i >= 0; i--) {
+      if (ctx.bloques[i].paginas.length === 0) ctx.bloques.splice(i, 1);
+    }
+
+    // Calcular meta consolidado desde textosPorPagina
+    const meta = consolidarMeta(paginas);
+    const nombreSugerido = sugerirNombreBloque(paginas, meta);
+
+    ctx.bloques.push({
+      id: ctx.nextId++,
+      nombre: nombreSugerido,
+      paginas,
+      requerimientos: [],
+      meta
+    });
+
+    ctx.seleccion.clear();
+    refrescarSeleccionVisual();
+    actualizarInfoSeleccion();
+    renderBloques();
+  }
+
+  function consolidarMeta(paginas) {
+    const meta = { cuil: "", apellido: "", nombre: "", patente: "", periodo: "", tiposDetectados: [] };
+    for (const p of paginas) {
+      const info = ctx.textosPorPagina.find((t) => t.pagina === p);
+      if (!info) continue;
+      if (!meta.cuil && info.cuil) meta.cuil = info.cuil;
+      if (!meta.apellido && info.apellido) meta.apellido = info.apellido;
+      if (!meta.nombre && info.nombre) meta.nombre = info.nombre;
+      if (!meta.patente && info.patente) meta.patente = info.patente;
+      if (!meta.periodo && info.periodo) meta.periodo = info.periodo;
+      if (info.id && !meta.tiposDetectados.includes(info.id)) meta.tiposDetectados.push(info.id);
+    }
+    return meta;
+  }
+
+  function sugerirNombreBloque(paginas, meta) {
+    const primera = ctx.textosPorPagina.find((t) => t.pagina === paginas[0]);
+    const base = primera?.etiqueta || "Bloque";
+    const extras = [];
+    if (meta.apellido || meta.nombre) extras.push(`${meta.apellido || ""} ${meta.nombre || ""}`.trim());
+    if (meta.patente) extras.push(`patente ${meta.patente}`);
+    return extras.length ? `${base} — ${extras.join(" · ")}` : base;
+  }
+
+  function renderBloques() {
+    const cont = ctx.root.querySelector("#mau-bloques-list");
+    if (!cont) return;
+    cont.innerHTML = "";
+    if (!ctx.bloques.length) {
+      cont.innerHTML = `<div style="font-size:11px;color:#888;">Todavía no armaste ningún bloque. Seleccioná páginas a la izquierda y apretá <em>Crear bloque</em>.</div>`;
+      return;
+    }
+    for (const b of ctx.bloques) {
+      const div = document.createElement("div");
+      div.className = "mau-bloque";
+      const metaStr = [
+        b.meta.apellido && `Apellido: ${b.meta.apellido}`,
+        b.meta.cuil && `CUIL: ${b.meta.cuil}`,
+        b.meta.patente && `Patente: ${b.meta.patente}`,
+        b.meta.periodo && `Período: ${b.meta.periodo}`
+      ].filter(Boolean).join(" · ");
+
+      const reqsHtml = (ctx.requerimientos || []).map((r) => {
+        const checked = b.requerimientos.includes(r.nombre) ? "checked" : "";
+        // Mostrar recurso (empleado) si está disponible.
+        const recursoLabel = r.recurso && (r.recurso.apellido || r.recurso.nombre)
+          ? ` <span style="color:#888;font-size:11px;">(${[r.recurso.apellido, r.recurso.nombre].filter(Boolean).join(" ")})</span>`
+          : "";
+        return `<label><input type="checkbox" data-req="${escapeHtml(r.nombre)}" ${checked}/> ${escapeHtml(r.nombre)}${recursoLabel}</label>`;
+      }).join("") || `<div style="font-size:11px;color:#888;">No hay requerimientos detectados en la bandeja.</div>`;
+
+      div.innerHTML = `
+        <header>
+          <strong>Bloque #${b.id}</strong>
+          <button data-borrar="${b.id}" title="Borrar bloque">✕</button>
+        </header>
+        <input type="text" data-nombre="${b.id}" value="${escapeHtml(b.nombre)}" />
+        <div class="mau-paginas">Páginas: ${b.paginas.join(", ")}</div>
+        ${metaStr ? `<div class="mau-meta">${escapeHtml(metaStr)}</div>` : ""}
+        <label>Subir a estos requerimientos:</label>
+        <div class="mau-req-list" data-reqs="${b.id}">${reqsHtml}</div>
+      `;
+      cont.appendChild(div);
+    }
+
+    cont.querySelectorAll("button[data-borrar]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = parseInt(btn.dataset.borrar, 10);
+        ctx.bloques = ctx.bloques.filter((b) => b.id !== id);
+        renderBloques();
+        refrescarSeleccionVisual();
+      });
+    });
+    cont.querySelectorAll("input[data-nombre]").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const id = parseInt(inp.dataset.nombre, 10);
+        const b = ctx.bloques.find((x) => x.id === id);
+        if (b) {
+          b.nombre = inp.value;
+          refrescarSeleccionVisual();
+        }
+      });
+    });
+    cont.querySelectorAll("div[data-reqs]").forEach((div) => {
+      const id = parseInt(div.dataset.reqs, 10);
+      const b = ctx.bloques.find((x) => x.id === id);
+      if (!b) return;
+      div.querySelectorAll("input[type=checkbox]").forEach((chk) => {
+        chk.addEventListener("change", () => {
+          const nombre = chk.dataset.req;
+          if (chk.checked) {
+            if (!b.requerimientos.includes(nombre)) b.requerimientos.push(nombre);
+          } else {
+            b.requerimientos = b.requerimientos.filter((n) => n !== nombre);
+          }
+        });
+      });
+    });
+  }
+
+  async function confirmar() {
+    // Validación básica
+    const sinReq = ctx.bloques.filter((b) => !b.requerimientos.length && !esDesestimar(b));
+    if (sinReq.length) {
+      if (!confirm(`Hay ${sinReq.length} bloque(s) sin requerimiento asignado. ¿Querés confirmar igual? (se ignorarán)`)) return;
+    }
+    if (!ctx.bloques.length) {
+      alert("Armá al menos un bloque antes de confirmar.");
+      return;
+    }
+
+    const bloquesSalida = ctx.bloques
+      .filter((b) => b.paginas.length && (b.requerimientos.length || esDesestimar(b)))
+      .map((b) => ({
+        nombre: b.nombre,
+        paginas: [...b.paginas].sort((a, b) => a - b),
+        requerimientos: [...b.requerimientos],
+        meta: { ...b.meta }
+      }));
+
+    const onConfirm = ctx.onConfirm;
+    limpiar();
+    if (onConfirm) {
+      try { await onConfirm(bloquesSalida); }
+      catch (e) { console.error("[MAU modal] onConfirm error:", e); alert("Error al procesar: " + (e?.message || e)); }
+    }
+  }
+
+  function esDesestimar(b) {
+    const nom = (b.nombre || "").toLowerCase();
+    return nom.includes("desestimar") || nom.includes("descartar");
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  window.MAUModalSeleccion = { abrir };
+})();

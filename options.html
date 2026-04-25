@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DocAutomatización - Opciones</title>
+  <style>
+    body {
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      margin: 0; padding: 32px;
+      color: #e2e8f0;
+      background: linear-gradient(165deg, #0f172a 0%, #1e293b 100%);
+      min-height: 100vh;
+      max-width: 640px;
+    }
+    h1 {
+      font-size: 24px; font-weight: 700;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    h2 { margin-top: 28px; font-size: 16px; color: #94a3b8; }
+    button {
+      border: 0; background: linear-gradient(135deg, #1e40af, #3b82f6);
+      color: #fff; border-radius: 10px; padding: 10px 16px;
+      cursor: pointer; font-size: 14px; font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    button:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,130,246,0.3); }
+    button.alt { background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.15); }
+    button.alt:hover { background: rgba(148,163,184,0.2); box-shadow: none; }
+    input[type="password"], input[type="text"], select {
+      width: 100%; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid rgba(148,163,184,0.15);
+      font-size: 14px; margin-top: 6px;
+      background: rgba(15,23,42,0.8); color: #e2e8f0;
+      transition: border-color 0.2s ease;
+    }
+    input:focus, select:focus {
+      outline: none; border-color: #38bdf8;
+      box-shadow: 0 0 0 2px rgba(56,189,248,0.15);
+    }
+    label { font-weight: 600; font-size: 13px; color: #94a3b8; }
+    .row { margin-top: 14px; }
+    .acciones { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+    #estado { margin-top: 14px; padding: 10px; border-radius: 8px; min-height: 18px; }
+    #estado.ok { background: rgba(52,211,153,0.15); color: #34d399; }
+    #estado.err { background: rgba(248,113,113,0.15); color: #f87171; }
+    .hint { font-size: 12px; color: #64748b; margin-top: 4px; }
+    .hint b { color: #38bdf8; }
+  </style>
+</head>
+<body>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+    <img src="icons/icon128.png" alt="Logo" width="40" height="40" style="border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,0.3);" />
+    <h1 style="margin:0;">DocAutomatización</h1>
+  </div>
+
+  <h2>Inteligencia artificial (Claude)</h2>
+  <p class="hint">La extensión usa la API de Claude para mirar cada página del PDF sábana y decir qué tipo de documento es. Necesitás una API Key de Anthropic.</p>
+
+  <div class="row">
+    <label for="apikey">API Key de Anthropic</label>
+    <input id="apikey" type="password" placeholder="sk-ant-..." />
+    <div class="hint">Se guarda solo en tu Chrome (storage local). No se envía a ningún otro lado. Sacala en <b>console.anthropic.com</b> → API Keys.</div>
+  </div>
+
+  <div class="row">
+    <label for="modelo">Modelo</label>
+    <select id="modelo">
+      <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (rápido y barato - recomendado)</option>
+      <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (más preciso, más caro)</option>
+    </select>
+  </div>
+
+  <div class="acciones">
+    <button id="guardar-api" type="button">Guardar</button>
+    <button id="probar-api" type="button" class="alt">Probar conexión</button>
+  </div>
+
+  <h2>Acceso a controldocumentario.com</h2>
+  <p class="hint">Si la extensión detecta que se cerró tu sesión, vuelve a ingresar automáticamente con estos datos. Se guardan solo en tu Chrome, en esta PC. No se envían a ningún otro lado.</p>
+
+  <div class="row">
+    <label for="cd-user">Usuario</label>
+    <input id="cd-user" type="text" placeholder="tu.usuario" autocomplete="off" />
+  </div>
+
+  <div class="row">
+    <label for="cd-pass">Contraseña</label>
+    <input id="cd-pass" type="password" placeholder="••••••••" autocomplete="new-password" />
+    <div class="hint">Si cambiás la contraseña en el sitio, acordate de actualizarla acá también.</div>
+  </div>
+
+  <div class="acciones">
+    <button id="guardar-cd" type="button">Guardar</button>
+    <button id="probar-cd" type="button" class="alt">Probar login</button>
+  </div>
+
+  <h2>Alerta de vencimientos por Telegram</h2>
+  <p class="hint">Te manda un mensaje a tu Telegram cuando haya documentos próximos a vencer o vencidos. Chrome tiene que estar abierto para que funcione.</p>
+
+  <div class="row">
+    <label for="tg-token">Token del bot</label>
+    <input id="tg-token" type="password" placeholder="7428392014:AAEh..." />
+    <div class="hint">Te lo da <b>@BotFather</b> cuando creás el bot con <b>/newbot</b>.</div>
+  </div>
+
+  <div class="row">
+    <label for="tg-chatid">Chat ID</label>
+    <input id="tg-chatid" type="text" placeholder="123456789" />
+    <div class="hint">Te lo da <b>@userinfobot</b> cuando apretás Start.</div>
+  </div>
+
+  <div class="row">
+    <label for="tg-dias-personal">Días de anticipación — <b>Personal</b></label>
+    <input id="tg-dias-personal" type="number" min="1" max="60" value="7" />
+    <div class="hint">Ejemplo: 7 → te avisa de los vencimientos de personal en los próximos 7 días (y los ya vencidos).</div>
+  </div>
+
+  <div class="row">
+    <label for="tg-dias-vehiculos">Días de anticipación — <b>Vehículos</b></label>
+    <input id="tg-dias-vehiculos" type="number" min="1" max="60" value="15" />
+    <div class="hint">Ejemplo: 15 → te avisa de los vencimientos de vehículos (seguros, técnica, etc.) en los próximos 15 días.</div>
+  </div>
+
+  <div class="row">
+    <label for="tg-frecuencia">Cada cuánto chequear (minutos)</label>
+    <select id="tg-frecuencia">
+      <option value="180">Cada 3 horas (recomendado)</option>
+      <option value="120">Cada 2 horas</option>
+      <option value="360">Cada 6 horas</option>
+      <option value="720">Cada 12 horas</option>
+      <option value="1440">1 vez al día</option>
+    </select>
+    <div class="hint">Necesita que tu Chrome esté abierto.</div>
+  </div>
+
+  <div class="row">
+    <label>No molestar (horario de silencio)</label>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+      <span style="font-size:13px;color:#94a3b8;">desde</span>
+      <input id="tg-silencio-desde" type="time" value="22:00" style="width:auto;" />
+      <span style="font-size:13px;color:#94a3b8;">hasta</span>
+      <input id="tg-silencio-hasta" type="time" value="08:00" style="width:auto;" />
+    </div>
+    <div class="hint">Entre esas horas no te llega ningún mensaje. Si ponés las dos horas iguales, queda apagado (te manda siempre).</div>
+  </div>
+
+  <div class="row">
+    <label style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+      <input id="tg-activo" type="checkbox" style="width:auto;" /> Activar alertas de Telegram
+    </label>
+  </div>
+
+  <div class="acciones">
+    <button id="guardar-tg" type="button">Guardar</button>
+    <button id="probar-tg" type="button" class="alt">Probar envío a Telegram</button>
+    <button id="chequear-ahora" type="button" class="alt">Chequear ahora</button>
+    <button id="chequear-visible" type="button" class="alt" title="Abre la página de Vencimientos en una pestaña visible para que veas el chequeo en vivo">Chequear (ver pestaña)</button>
+  </div>
+
+  <h2>Memoria de aprendizaje</h2>
+  <div class="acciones">
+    <button id="limpiar" type="button" class="alt">Limpiar memoria de mapeos</button>
+    <button id="limpiar-sabana" type="button" class="alt">Limpiar patrones de sábana</button>
+  </div>
+
+  <p id="estado"></p>
+  <script src="options.js"></script>
+</body>
+</html>
