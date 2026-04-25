@@ -20,29 +20,46 @@
   const ui = {
     panel: document.getElementById("docauto-panel"),
     minimizar: document.getElementById("mau-minimizar"),
+    // Modo trabajar
+    modoTrabajar: document.getElementById("mau-modo-trabajar"),
+    modoSabana: document.getElementById("mau-modo-sabana"),
+    tabTrabajar: document.getElementById("mau-tab-trabajar"),
+    tabSabana: document.getElementById("mau-tab-sabana"),
     dropzone: document.getElementById("mau-dropzone"),
     seleccionar: document.getElementById("mau-seleccionar"),
     fileInput: document.getElementById("mau-file-input"),
-    abrirMapeo: document.getElementById("mau-abrir-mapeo"),
     detectar: document.getElementById("mau-detectar"),
     tabla: document.getElementById("mau-tabla-body"),
     procesar: document.getElementById("mau-procesar"),
     pText: document.getElementById("mau-progress-text"),
     pInner: document.getElementById("mau-progress-inner"),
+    // Modo sábana
+    abrirMapeo: document.getElementById("mau-abrir-mapeo"),
     sabanaWrap: document.getElementById("mau-sabana-wrap"),
-    docUnico: document.getElementById("mau-doc-unico"),
-    ocrDividir: document.getElementById("mau-ocr-dividir"),
-    modalDividir: document.getElementById("mau-modal-dividir"),
     sabanaEditor: document.getElementById("mau-sabana-editor"),
     patronNombre: document.getElementById("mau-patron-nombre"),
     sabanaTablaBody: document.getElementById("mau-sabana-tabla-body"),
     sabanaConfirmar: document.getElementById("mau-sabana-confirmar"),
     sabanaCancelar: document.getElementById("mau-sabana-cancelar"),
+    pTextSabana: document.getElementById("mau-progress-text-sabana"),
+    pInnerSabana: document.getElementById("mau-progress-inner-sabana"),
     toast: document.getElementById("mau-toast")
   };
 
   if (!ui.panel) return;
   instalarInterceptorAlertasNativas();
+
+  // ── Tabs de modo ──
+  function activarTab(modo) {
+    const esTrab = modo === "trabajar";
+    ui.modoTrabajar.hidden = !esTrab;
+    ui.modoSabana.hidden = esTrab;
+    ui.tabTrabajar.classList.toggle("mau-tab-active", esTrab);
+    ui.tabSabana.classList.toggle("mau-tab-active", !esTrab);
+  }
+  if (ui.tabTrabajar) ui.tabTrabajar.addEventListener("click", () => activarTab("trabajar"));
+  if (ui.tabSabana) ui.tabSabana.addEventListener("click", () => activarTab("sabana"));
+
 
   ui.minimizar.addEventListener("click", () => {
     const body = ui.panel.querySelector(".mau-body");
@@ -51,33 +68,7 @@
   ui.detectar.addEventListener("click", detectarRequerimientosPendientes);
   ui.procesar.addEventListener("click", procesarTodo);
   if (ui.abrirMapeo) ui.abrirMapeo.addEventListener("click", abrirGestorMapeo);
-  if (ui.docUnico) ui.docUnico.addEventListener("click", async () => {
-    const file = estado.sabanaPendiente;
-    if (!file) return;
-    const modo = await preguntarOpciones({
-      titulo: "¿Cómo querés asignarlo?",
-      mensaje: `"${file.name}" — elegí si la IA lo identifica sola o lo asignás vos a mano.`,
-      opciones: [
-        { id: "ia", label: "🤖 Con IA (lee 1 página para identificarlo)" },
-        { id: "manual", label: "✋ Manual (lo elijo yo, no gasta API)" },
-        { id: "cancel", label: "Cancelar", secondary: true }
-      ]
-    });
-    if (modo === "cancel" || !modo) return;
-    ui.docUnico.disabled = true;
-    try {
-      if (modo === "ia") {
-        await tratarComoDocumentoUnico(file);
-      } else {
-        asignarDocumentoUnicoManual(file);
-      }
-      resetSabanaUi();
-    } finally {
-      ui.docUnico.disabled = false;
-    }
-  });
-  if (ui.ocrDividir) ui.ocrDividir.addEventListener("click", ejecutarFlujoOcrSabana);
-  if (ui.modalDividir) ui.modalDividir.addEventListener("click", analizarSabana);
+
   if (ui.sabanaConfirmar) ui.sabanaConfirmar.addEventListener("click", confirmarPatronSabana);
   if (ui.sabanaCancelar) ui.sabanaCancelar.addEventListener("click", cancelarEditorSabana);
   ui.seleccionar.addEventListener("click", () => ui.fileInput.click());
@@ -352,22 +343,151 @@
   }
 
   async function procesarArchivosPdf(archivos, origen) {
-    console.log(`[MAU] Iniciando procesamiento de ${archivos.length} PDF(s). Origen: ${origen}`);
+    console.log(`[MAU] [TRABAJAR] Procesando ${archivos.length} PDF(s). Origen: ${origen}`);
     if (!estado.requerimientos.length) await detectarRequerimientosPendientes();
-    console.log("[MAU] Requerimientos detectados:", estado.requerimientos.length);
-    const memoria = await window.MAUStorage.leerMemoria();
-    console.log("[MAU] Memoria cargada. Cantidad de patrones:", Object.keys(memoria || {}).length);
+
+    if (!window.MAUOcrEngine?.extraerTextoPorPagina) {
+      mostrarToast("El motor OCR no está disponible.");
+      return;
+    }
+
+    const patrones = (await window.MAUStorage.leerPatronesSabana()) || [];
+    if (!patrones.length) {
+      mostrarToast("No hay mapeo guardado. Primero subí una sábana en la pestaña «Subir sábana».");
+      return;
+    }
+
+    // Reunir todos los bloquesModal de todos los patrones para buscar coincidencias
+    const todosLosBloques = patrones.flatMap((p) =>
+      (p.bloquesModal || []).filter((b) => b.requerimientos?.length).map((b) => ({
+        ...b,
+        _firmaTiposPatron: p.firmaTipos || []
+      }))
+    );
 
     for (const archivo of archivos) {
-      console.log("[MAU] Procesando archivo:", archivo.name);
+      console.log("[MAU] [TRABAJAR] Identificando:", archivo.name);
+      ui.pText.textContent = `Analizando ${archivo.name} con Claude…`;
+      try {
+        const textos = await window.MAUOcrEngine.extraerTextoPorPagina(archivo, (info) => {
+          if (info.pagina && info.totalPaginas) {
+            const pct = Math.round((info.pagina / info.totalPaginas) * 100);
+            actualizarProgreso(info.pagina, info.totalPaginas, info.mensaje || `Leyendo página ${info.pagina}/${info.totalPaginas}…`);
+            ui.pInner.style.width = `${pct}%`;
+          }
+        });
+
+        // Para cada página clasificada, encontrar el bloque del mapeo que corresponde
+        const normStr = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+        // Debug: mostrar estado de los bloques del mapeo
+        console.log(`[MAU][TRABAJAR] Bloques en mapeo: ${todosLosBloques.length}`);
+        todosLosBloques.forEach((b, i) => {
+          const tipos = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "?");
+          console.log(`[MAU][TRABAJAR]   B[${i}] "${b.nombre}" pags=[${(b.paginas||[]).join(',')}] tipos=[${tipos.join(',')}] meta=${JSON.stringify(b.meta||null)} reqs=${(b.requerimientos||[]).join('|')}`);
+        });
+
+        // Agrupar páginas por bloque del mapeo
+        const asignaciones = new Map(); // bloqueIdx → [páginas]
+        const bloqueDeKeys = new Map(); // bloqueIdx → bloque obj
+
+        textos.forEach((t) => {
+          if (!t.etiqueta && t.id === "desconocido") return;
+          const cuilPag = normStr(t.cuil || "").replace(/[^0-9]/g, "");
+          const apellidoPag = normStr(t.apellido || "");
+          console.log(`[MAU][TRABAJAR] Pág.${t.pagina}: id="${t.id}" etiq="${t.etiqueta}" cuil="${t.cuil}" apellido="${t.apellido}"`);
+
+          // Buscar el mejor bloque del mapeo que coincida con tipo + empleado
+          let mejorBloque = null;
+          let mejorScore = -1;
+
+          todosLosBloques.forEach((b, bi) => {
+            const tiposBloque = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "desconocido");
+            const tiposConocidos = tiposBloque.filter(tp => tp !== "desconocido");
+            const coincideTipo = tiposBloque.includes(t.etiqueta) || tiposBloque.includes(t.id);
+
+            // Si el bloque tiene tipos clasificados y ninguno coincide → saltar
+            if (tiposConocidos.length > 0 && !coincideTipo) return;
+            // Si el bloque NO tiene tipos clasificados (patrón viejo) → solo permitir si CUIL exacto
+            if (tiposConocidos.length === 0) {
+              const cuilBloqFallback = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
+              if (!cuilBloqFallback || !cuilPag || cuilPag !== cuilBloqFallback) return;
+            }
+
+            let score = coincideTipo ? 1 : 0; // coincide en tipo (o fallback sin tipo)
+            const cuilBloque = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
+            const apellidoBloque = normStr(b.meta?.apellido || "");
+
+            if (cuilBloque && cuilPag && cuilPag === cuilBloque) score += 10;
+            else if (apellidoBloque && apellidoPag && apellidoPag.includes(apellidoBloque)) score += 5;
+            else if (apellidoBloque && normStr([t.textoEstable, t.nombre].join(" ")).includes(apellidoBloque)) score += 2;
+
+            if (score > mejorScore) { mejorScore = score; mejorBloque = bi; bloqueDeKeys.set(bi, b); }
+          });
+
+          if (mejorBloque !== null) {
+            console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} matcheó bloque "${bloqueDeKeys.get(mejorBloque)?.nombre}" (score=${mejorScore})`);
+            if (!asignaciones.has(mejorBloque)) asignaciones.set(mejorBloque, []);
+            asignaciones.get(mejorBloque).push(t.pagina);
+          } else {
+            console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} SIN match en ningún bloque`);
+          }
+        });
+
+        // Crear un archivo PDF por cada bloque identificado y asignar a sus requerimientos
+        if (!asignaciones.size) {
+          mostrarToast(`No se pudo identificar «${archivo.name}» con el mapeo guardado.`);
+          continue;
+        }
+
+        await window.MAUPdfSplitter.cargarLibreria(
+          "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js", "PDFLib"
+        );
+        const bytes = await archivo.arrayBuffer();
+        const src = await window.PDFLib.PDFDocument.load(bytes);
+
+        for (const [bi, paginas] of asignaciones) {
+          const bloque = bloqueDeKeys.get(bi);
+          const nuevo = await window.PDFLib.PDFDocument.create();
+          const indices = paginas.map((n) => n - 1).filter((i) => i >= 0 && i < src.getPageCount());
+          const pages = await nuevo.copyPages(src, indices);
+          pages.forEach((p) => nuevo.addPage(p));
+          const out = await nuevo.save();
+          const nombreArchivo = `${archivo.name.replace(/\.pdf$/i, "")}-Bloque.pdf`;
+          const archivoBloque = new File([out], nombreArchivo, { type: "application/pdf" });
+
+          for (const req of bloque.requerimientos) {
+            const copia = new File([await archivoBloque.arrayBuffer()], nombreArchivo, { type: "application/pdf" });
+            asignarArchivoARequerimiento(req, copia, bloque.meta || null);
+            console.log(`[MAU] [TRABAJAR] Asignado a «${req}» — páginas: ${paginas.join(",")}`);
+          }
+        }
+
+        mostrarToast(`«${archivo.name}» identificado y asignado. Revisá la tabla.`);
+
+      } catch (err) {
+        alertarErrorOcr(err);
+      }
+    }
+
+    ui.pText.textContent = "Sin procesamiento en curso";
+    ui.pInner.style.width = "0%";
+    renderTabla();
+  }
+
+  // ── Flujo sábana (modo aprendizaje) — se activa desde la tab «Subir sábana» ──
+  async function procesarArchivosPdfSabana(archivos, origen) {
+    console.log(`[MAU] [SÁBANA] Procesando ${archivos.length} PDF(s). Origen: ${origen}`);
+    if (!estado.requerimientos.length) await detectarRequerimientosPendientes();
+    const memoria = await window.MAUStorage.leerMemoria();
+
+    for (const archivo of archivos) {
+      console.log("[MAU] Procesando sábana:", archivo.name);
       let numPag = 0;
       try {
-        if (window.MAUOcrEngine?.contarPaginasPdf) {
-          numPag = await window.MAUOcrEngine.contarPaginasPdf(archivo);
-        }
-      } catch (e) {
-        console.warn("[MAU] No se pudo contar páginas del PDF:", e);
-      }
+        if (window.MAUOcrEngine?.contarPaginasPdf) numPag = await window.MAUOcrEngine.contarPaginasPdf(archivo);
+      } catch (e) { console.warn("[MAU] No se pudo contar páginas:", e); }
+
       if (numPag > 1) {
         estado.sabanaPendiente = archivo;
         mostrarSeccionSabana(true);
@@ -389,37 +509,32 @@
             const textos = await window.MAUOcrEngine.extraerTextoPorPagina(archivo, () => {});
             const firmaTipos = textos.map((t) => t.etiqueta || "desconocido");
             console.log("[MAU] Firma detectada:", firmaTipos.join(" | "));
-            const mismoMultiset = (a, b) => {
-              if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-              const sa = [...a].sort();
-              const sb = [...b].sort();
-              return sa.every((v, i) => v === sb[i]);
+            // Similitud multiset: fracción de tipos que coinciden (tolera páginas mal clasificadas)
+            const similitudMultiset = (a, b) => {
+              if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+              if (a.length !== b.length) return 0;
+              const contB = {};
+              for (const x of b) contB[x] = (contB[x] || 0) + 1;
+              let matches = 0;
+              for (const x of a) { if (contB[x] > 0) { matches++; contB[x]--; } }
+              return matches / a.length;
             };
-            const match = patrones.find(
-              (p) =>
-                Array.isArray(p.firmaTipos) &&
-                mismoMultiset(p.firmaTipos, firmaTipos) &&
-                Array.isArray(p.bloquesModal) &&
-                p.bloquesModal.length
+            // Buscar primero match exacto, luego match aproximado (≥70% tipos coinciden)
+            const candidatos = patrones.filter(
+              (p) => Array.isArray(p.firmaTipos) && Array.isArray(p.bloquesModal) && p.bloquesModal.length
             );
+            const match = candidatos.find((p) => similitudMultiset(p.firmaTipos, firmaTipos) === 1) ||
+                          candidatos.map((p) => ({ p, s: similitudMultiset(p.firmaTipos, firmaTipos) }))
+                                    .filter((x) => x.s >= 0.70)
+                                    .sort((a, b) => b.s - a.s)[0]?.p || null;
             if (match) {
-              console.log("[MAU] ✓ Patrón reconocido (por contenido):", match.nombre);
-              mostrarToast(`Patrón «${match.nombre}» reconocido y aplicado.`);
-              // Remapear páginas del patrón al orden actual del PDF, según el tipo de cada página.
-              const disponibles = firmaTipos.map((t, i) => ({ tipo: t, pagina: i + 1, usada: false }));
-              const bloquesRemapeados = match.bloquesModal.map((b) => {
-                const nuevasPags = [];
-                for (const pOriginal of (b.paginas || [])) {
-                  const tipoOriginal = (match.firmaTipos[pOriginal - 1]) || "desconocido";
-                  const slot = disponibles.find((d) => !d.usada && d.tipo === tipoOriginal);
-                  if (slot) {
-                    slot.usada = true;
-                    nuevasPags.push(slot.pagina);
-                  }
-                }
-                return { ...b, paginas: nuevasPags };
-              }).filter((b) => b.paginas.length);
-              console.log("[MAU] Bloques remapeados:", bloquesRemapeados);
+              const sim = similitudMultiset(match.firmaTipos, firmaTipos);
+              const esExacto = sim === 1;
+              console.log(`[MAU] ✓ Patrón reconocido («${match.nombre}», similitud ${Math.round(sim * 100)}%). Aplicando…`);
+              mostrarToast(`Patrón «${match.nombre}» reconocido${esExacto ? "" : ` (~${Math.round(sim * 100)}% match)`} y aplicado.`);
+              // Remapear usando tipo primero y nombre/CUIL para desempatar bloques del mismo tipo.
+              const bloquesRemapeados = remapearBloquesPorTexto(match.bloquesModal, textos, match.firmaTipos);
+              console.log("[MAU] Bloques remapeados (por nombre+tipo):", bloquesRemapeados);
               await aplicarBloquesModal(archivo, bloquesRemapeados);
               continue;
             } else {
@@ -433,56 +548,9 @@
         }
         continue;
       }
-
-      // Clasificar la primera página con Claude Vision para extraer metadata (apellido, CUIL, etc.)
-      let metaOcr = null;
-      try {
-        if (window.MAUOcrEngine?.extraerTextoPorPagina) {
-          console.log("[MAU] OCR: analizando primera página de", archivo.name);
-          ui.pText.textContent = `Analizando ${archivo.name} con Claude…`;
-          const textos = await window.MAUOcrEngine.extraerTextoPorPagina(archivo, () => {});
-          if (textos.length > 0) {
-            const t = textos[0];
-            metaOcr = {
-              id: t.id || "",
-              etiqueta: t.etiqueta || "",
-              apellido: t.apellido || "",
-              nombre: t.nombre || "",
-              cuil: t.cuil || "",
-              patente: t.patente || "",
-              periodo: t.periodo || ""
-            };
-            console.log("[MAU] OCR resultado:", JSON.stringify(metaOcr));
-            mostrarToast(`IA detectó: ${metaOcr.etiqueta || metaOcr.id || "?"} — ${metaOcr.apellido || "?"} ${metaOcr.nombre || ""}`);
-          }
-          ui.pText.textContent = "Sin procesamiento en curso";
-        }
-      } catch (ocrErr) {
-        console.warn("[MAU] Error OCR en PDF individual:", ocrErr);
-      }
-
-      // Pasar objetos de requerimiento completos (con recurso) y metadata OCR al matcher.
-      const reqObjs = estado.requerimientos.map((r) => ({ nombre: r.nombre, recurso: r.recurso || null }));
-      const sugerido = window.MAUMatcher.sugerirRequerimiento(archivo.name, reqObjs, memoria, metaOcr);
-      console.log("[MAU] Requerimiento sugerido:", sugerido || "(sin match)");
-      if (sugerido) {
-        asignarArchivoARequerimiento(sugerido, archivo, metaOcr);
-        console.log("[MAU] Archivo asignado:", archivo.name, "=>", sugerido);
-      } else {
-        agregarFilaSinAsignar(archivo);
-        console.log("[MAU] Archivo agregado como sin asignar:", archivo.name);
-      }
+      // PDF de 1 página en modo sábana → ignorar (no aplica)
     }
     renderTabla();
-    console.log("[MAU] Tabla renderizada tras carga de archivos.");
-    // DEBUG: resumen de asignaciones
-    console.log("[MAU][RESUMEN] Estado final de filas tras asignación:");
-    estado.filas.forEach((f, i) => {
-      console.log(`[MAU][RESUMEN]   [${i}] id=${f.id} req="${f.requerimiento}" archivo="${f.archivo?.name || '-'}" estado="${f.estado}" recurso="${f.recurso?.apellido || '(vacío)'}"`);
-    });
-    const conArchivo = estado.filas.filter(f => f.archivo);
-    const sinArchivo = estado.filas.filter(f => !f.archivo);
-    console.log(`[MAU][RESUMEN] Con archivo: ${conArchivo.length}, Sin archivo: ${sinArchivo.length}`);
   }
 
   function mostrarSeccionSabana(visible) {
@@ -2262,38 +2330,60 @@
     return candidatos[0]?.patron || null;
   }
 
-  function remapearBloquesPorTexto(bloquesPatron, textos) {
+  function remapearBloquesPorTexto(bloquesPatron, textos, firmaTiposPatron) {
     const normStr = (s) =>
       (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 
-    // Verificar si el patrón tiene texto guardado por bloque
-    const tieneTexto = bloquesPatron.some((b) => b.textoEstableBloque && b.textoEstableBloque.trim().length > 5);
-    if (!tieneTexto) return bloquesPatron; // sin texto → usar posiciones originales
-
-    // Para cada par (página nueva, bloque guardado), calcular similitud de texto
-    const scores = textos.map((t) => {
-      const textoPagina = normStr([t.textoEstable, t.apellido, t.nombre, t.cuil].filter(Boolean).join(" "));
-      const wordsPagina = new Set(textoPagina.split(/\s+/).filter((w) => w.length > 2));
-
-      const scoresPorBloque = bloquesPatron.map((b, bi) => {
-        const textoBloque = normStr(b.textoEstableBloque || "");
-        const wordsBloque = textoBloque.split(/\s+/).filter((w) => w.length > 2);
-        const score = wordsBloque.filter((w) => wordsPagina.has(w)).length;
-        return { bi, score };
-      });
-
-      const mejor = scoresPorBloque.sort((a, b) => b.score - a.score)[0];
-      return { pagina: t.pagina, bi: mejor.score > 0 ? mejor.bi : -1, score: mejor.score };
+    // Construir los tipos esperados por bloque a partir del patrón original
+    // firmaTiposPatron[i] = etiqueta de la página (i+1) en el patrón guardado
+    const bloquesConTipos = bloquesPatron.map((b) => {
+      const tiposEsperados = (b.paginas || []).map((p) => (firmaTiposPatron ? firmaTiposPatron[p - 1] : null) || "desconocido");
+      return { ...b, tiposEsperados };
     });
 
-    // Asignar cada página al bloque de mayor score (greedy, sin duplicar bloques)
-    // Cada página va al bloque con mejor score; páginas con score 0 quedan sin asignar
-    const nuevasPaginas = bloquesPatron.map(() => []);
-    for (const { pagina, bi } of scores) {
-      if (bi >= 0) nuevasPaginas[bi].push(pagina);
+    // Pool de páginas disponibles del PDF actual
+    const disponibles = textos.map((t) => ({ ...t, usada: false }));
+
+    const nuevasPaginas = bloquesConTipos.map(() => []);
+
+    for (let bi = 0; bi < bloquesConTipos.length; bi++) {
+      const b = bloquesConTipos[bi];
+      const apellidoBloque = normStr(b.meta?.apellido || "");
+      const cuilBloque = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
+
+      for (const tipoEsperado of b.tiposEsperados) {
+        // Candidatos: misma etiqueta o mismo id, no usados
+        const candidatos = disponibles.filter(
+          (d) => !d.usada && (d.etiqueta === tipoEsperado || d.id === tipoEsperado || normStr(d.etiqueta) === normStr(tipoEsperado))
+        );
+        if (!candidatos.length) continue;
+
+        if (candidatos.length === 1) {
+          // Único candidato con ese tipo → asignar directo
+          candidatos[0].usada = true;
+          nuevasPaginas[bi].push(candidatos[0].pagina);
+        } else {
+          // Varios candidatos del mismo tipo → usar nombre/CUIL para desempatar
+          const scored = candidatos.map((c) => {
+            let score = 0;
+            const cuilPag = normStr(c.cuil || "").replace(/[^0-9]/g, "");
+            const apellidoPag = normStr(c.apellido || "");
+            const nombrePag = normStr(c.nombre || "");
+            const textoPag = normStr([c.textoEstable, c.apellido, c.nombre].join(" "));
+            if (cuilBloque && cuilPag && cuilPag === cuilBloque) score += 10;
+            if (apellidoBloque && apellidoPag && apellidoPag.includes(apellidoBloque)) score += 5;
+            if (apellidoBloque && textoPag.includes(apellidoBloque)) score += 2;
+            return { c, score };
+          });
+          scored.sort((a, b) => b.score - a.score);
+          scored[0].c.usada = true;
+          nuevasPaginas[bi].push(scored[0].c.pagina);
+        }
+      }
     }
 
-    return bloquesPatron.map((b, bi) => ({
+    // Fallback: si algún bloque quedó vacío, usar sus páginas originales del patrón
+    return bloquesConTipos.map((b, bi) => ({
       ...b,
       paginas: nuevasPaginas[bi].length ? nuevasPaginas[bi].sort((a, c) => a - c) : b.paginas
     }));
@@ -2326,8 +2416,8 @@
       const match = buscarMejorPatron(patrones, firmaTipos, textos);
 
       if (match) {
-        // Reasignar páginas por contenido de texto (ignora el orden original)
-        const bloquesRemapeados = remapearBloquesPorTexto(match.bloquesModal, textos);
+        // Reasignar páginas usando tipo primero y nombre/CUIL para desempatar.
+        const bloquesRemapeados = remapearBloquesPorTexto(match.bloquesModal, textos, match.firmaTipos);
         mostrarToast(`Patrón «${match.nombre}» encontrado. Aplicando…`);
         ui.pText.textContent = `Patrón «${match.nombre}» aplicado automáticamente.`;
         await aplicarBloquesModal(file, bloquesRemapeados);
@@ -2491,9 +2581,11 @@
       bloquesIniciales,
       nombrePatron: patronElegido?.nombre || "",
       onConfirm: async (bloques, numPaginas) => {
-        // Claude es obligatorio: lee cada página para saber de quién es el documento
-        // (apellido, CUIL, patente) y para guardar el texto de referencia del patrón.
-        const paginasUnicas = [...new Set(bloques.flatMap((b) => b.paginas))].sort((a, b) => a - b);
+        // Claude es obligatorio: lee TODAS las páginas para:
+        // 1. Saber de quién es el documento (apellido, CUIL, patente) → meta de cada bloque
+        // 2. Guardar el tipo de cada página → firmaTipos completo para el modo Trabajar
+        // IMPORTANTE: no usar paginasEspecificas aquí porque las páginas NO asignadas a bloques
+        // (ej: recibos de haberes) también necesitan su tipo guardado en firmaTipos.
         let textosPorPagina = [];
         try {
           ui.pText.textContent = "Leyendo contenido de las páginas con Claude…";
@@ -2504,8 +2596,8 @@
                 actualizarProgreso(info.pagina, info.totalPaginas, info.mensaje || "");
                 ui.pInner.style.width = `${Math.round((info.pagina / info.totalPaginas) * 100)}%`;
               }
-            },
-            { paginasEspecificas: paginasUnicas }
+            }
+            // Sin paginasEspecificas → clasifica TODAS las páginas
           );
         } catch (e) {
           alertarErrorOcr(e);

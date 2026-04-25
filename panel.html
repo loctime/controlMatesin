@@ -9,68 +9,91 @@
   </header>
 
   <section class="mau-body">
-    <div id="mau-dropzone" class="mau-dropzone">
-      Arrastrá archivos PDF acá
+
+    <!-- SELECTOR DE MODO -->
+    <div class="mau-modo-tabs">
+      <button id="mau-tab-trabajar" class="mau-tab mau-tab-active">📤 Trabajar</button>
+      <button id="mau-tab-sabana" class="mau-tab">🎓 Aprender</button>
     </div>
 
-    <div class="mau-actions">
-      <button id="mau-seleccionar" class="mau-btn mau-btn-secondary">Seleccionar archivos</button>
-      <input id="mau-file-input" type="file" accept="application/pdf,.pdf" multiple hidden />
+    <!-- ══════════════════════════════════════════════
+         MODO TRABAJAR
+    ══════════════════════════════════════════════ -->
+    <div id="mau-modo-trabajar">
+      <p class="mau-modo-hint">Subí cualquier documento (recibos, comprobantes, etc.). Claude lo identifica y lo asigna al requerimiento correcto usando el mapeo guardado.</p>
+
+      <div id="mau-dropzone" class="mau-dropzone">
+        Arrastrá archivos PDF acá
+      </div>
+      <div class="mau-actions">
+        <button id="mau-seleccionar" class="mau-btn mau-btn-secondary">Seleccionar archivos</button>
+        <input id="mau-file-input" type="file" accept="application/pdf,.pdf" multiple hidden />
+      </div>
+      <div class="mau-actions">
+        <button id="mau-detectar" class="mau-btn">Detectar requerimientos pendientes</button>
+      </div>
+
+      <div class="mau-progress-wrap">
+        <div id="mau-progress-text">Sin procesamiento en curso</div>
+        <div class="mau-progress-bar">
+          <div id="mau-progress-inner"></div>
+        </div>
+      </div>
+
+      <table class="mau-tabla">
+        <thead>
+          <tr>
+            <th>Requerimiento</th>
+            <th>Archivo asignado</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody id="mau-tabla-body"></tbody>
+      </table>
+
+      <button id="mau-procesar" class="mau-btn mau-btn-main">Procesar todo</button>
     </div>
 
-    <div class="mau-actions">
-      <button id="mau-abrir-mapeo" class="mau-btn mau-btn-secondary">🗂 Gestión de mapeos</button>
-    </div>
+    <!-- ══════════════════════════════════════════════
+         MODO SÁBANA (aprendizaje / mapeo)
+    ══════════════════════════════════════════════ -->
+    <div id="mau-modo-sabana" hidden>
+      <p class="mau-modo-hint">Enseñale al sistema la estructura de tu sábana. Abrí "Gestión de mapeos" y seleccioná el PDF para configurar los bloques.</p>
 
-    <div class="mau-actions">
-      <button id="mau-detectar" class="mau-btn">Detectar requerimientos pendientes</button>
-    </div>
+      <div class="mau-actions">
+        <button id="mau-abrir-mapeo" class="mau-btn mau-btn-secondary">🗂 Gestión de mapeos</button>
+      </div>
 
-    <div id="mau-sabana-wrap" class="mau-sabana-wrap" hidden>
-      <p class="mau-sabana-hint">PDF con varias páginas. ¿Es un solo documento o son varios juntos?</p>
-      <button type="button" id="mau-doc-unico" class="mau-btn mau-btn-main" style="margin-bottom:8px;">📄 Es un solo documento</button>
-      <button type="button" id="mau-ocr-dividir" class="mau-btn mau-btn-ocr">Dividir con OCR (son varios)</button>
-      <button type="button" id="mau-modal-dividir" class="mau-btn mau-btn-ocr" style="margin-top:6px;">🔍 Analizar</button>
-      <div id="mau-sabana-editor" class="mau-sabana-editor" hidden>
-        <label class="mau-patron-label">Nombre del patrón (para reutilizar después)
-          <input id="mau-patron-nombre" type="text" placeholder="Lista A" class="mau-input" />
-        </label>
-        <table class="mau-tabla mau-sabana-tabla">
-          <thead>
-            <tr>
-              <th>Bloque</th>
-              <th>Desde</th>
-              <th>Hasta</th>
-            </tr>
-          </thead>
-          <tbody id="mau-sabana-tabla-body"></tbody>
-        </table>
-        <div class="mau-sabana-botones">
-          <button type="button" id="mau-sabana-confirmar" class="mau-btn">Confirmar y guardar patrón</button>
-          <button type="button" id="mau-sabana-cancelar" class="mau-btn mau-btn-secondary">Cancelar</button>
+      <div id="mau-sabana-wrap" class="mau-sabana-wrap" hidden>
+        <div id="mau-sabana-editor" class="mau-sabana-editor" hidden>
+          <label class="mau-patron-label">Nombre del patrón (para reutilizar después)
+            <input id="mau-patron-nombre" type="text" placeholder="Lista A" class="mau-input" />
+          </label>
+          <table class="mau-tabla mau-sabana-tabla">
+            <thead>
+              <tr>
+                <th>Bloque</th>
+                <th>Desde</th>
+                <th>Hasta</th>
+              </tr>
+            </thead>
+            <tbody id="mau-sabana-tabla-body"></tbody>
+          </table>
+          <div class="mau-sabana-botones">
+            <button type="button" id="mau-sabana-confirmar" class="mau-btn">Confirmar y guardar patrón</button>
+            <button type="button" id="mau-sabana-cancelar" class="mau-btn mau-btn-secondary">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mau-progress-wrap">
+        <div id="mau-progress-text-sabana">Sin procesamiento en curso</div>
+        <div class="mau-progress-bar">
+          <div id="mau-progress-inner-sabana"></div>
         </div>
       </div>
     </div>
 
-    <div class="mau-progress-wrap">
-      <div id="mau-progress-text">Sin procesamiento en curso</div>
-      <div class="mau-progress-bar">
-        <div id="mau-progress-inner"></div>
-      </div>
-    </div>
-
-    <table class="mau-tabla">
-      <thead>
-        <tr>
-          <th>Requerimiento</th>
-          <th>Archivo asignado</th>
-          <th>Estado</th>
-        </tr>
-      </thead>
-      <tbody id="mau-tabla-body"></tbody>
-    </table>
-
-    <button id="mau-procesar" class="mau-btn mau-btn-main">Procesar todo</button>
   </section>
   <div id="mau-toast" class="mau-toast" role="status" aria-live="polite" hidden></div>
 </aside>

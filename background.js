@@ -31,18 +31,18 @@ const TG_MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MODELO_DEFAULT = "claude-haiku-4-5-20251001";
 
 const TIPOS_DOCUMENTO = [
-  { id: "f931", etiqueta: "931", desc: "Formulario F 931 de AFIP/ARCA — declaración jurada SUSS/SICOSS con contribuciones y aportes (primera hoja del F931, con el logo ARCA 931)" },
+  { id: "f931", etiqueta: "931", desc: "Formulario ARCA 931 — tiene el logo de ARCA y un recuadro grande con el número '931' impreso. Dice 'Declaración Jurada en Pesos con centavos S.U.S.S.' Tiene tablas con secciones 'I - REGIMEN NACIONAL DE SEGURIDAD SOCIAL', 'II - REGIMEN NACIONAL DE OBRAS SOCIALES', 'VI - LEY DE RIESGOS DE TRABAJO', 'VIII - MONTOS QUE SE INGRESAN'. Es el formulario de declaración jurada, NO un ticket de banco." },
   { id: "nomina_f931", etiqueta: "Nomina 931", desc: "Nómina del F 931: listado de empleados asociados al F931 (tabla con nombres/CUILes de la declaración)" },
   { id: "acuse_f931", etiqueta: "Pago de 931", desc: "Acuse de recibo DJ ARCA / comprobante de presentación del F931 (Presentación DJ por Internet)" },
   { id: "vep_f931", etiqueta: "Pago de 931", desc: "VEP (Volante Electrónico de Pago) del F931 / SICOSS saldo DJ empleadores" },
-  { id: "pago_f931", etiqueta: "Pago de 931", desc: "Comprobante Banco Provincia del pago del F931 (operación realizada con éxito, cabe F931/SICOSS)" },
+  { id: "pago_f931", etiqueta: "Pago de 931", desc: "Comprobante Banco Provincia — título 'Pago' + 'Operación realizada con éxito' + 'Número de VEP'. SEÑAL DEFINITIVA: lista impuestos de seguridad social con códigos 351 (CONTRIBUCIONES SEG. SOCIAL), 301 (EMPLEADOR-APORTES SEG. SOCIAL), 352 (CONTRIBUCIONES OBRA SOCIAL), 302 (APORTES OBRAS SOCIALES), 312 (ASEG.RIESGO DE TRABAJO / ART), 28 (SEGURO DE VIDA COLECTIVO). Estos códigos son inconfundibles. No tiene 'Nueva transferencia' ni 'VAR f.Desempleo' ni 'Ente Abonado: UOCRA'." },
   { id: "boleta_uocra", etiqueta: "Pago de aportes sindicales", desc: "Boleta de depósito UOCRA (aporte cuota sindical, FCS, fondo cese laboral)" },
   { id: "dj_uocra", etiqueta: "Pago de aportes sindicales", desc: "Comprobante de Presentación de Declaración Jurada Nominativa UOCRA" },
-  { id: "pago_uocra", etiqueta: "Pago de aportes sindicales", desc: "Comprobante Banco Provincia del pago UOCRA (ente abonado UOCRA)" },
+  { id: "pago_uocra", etiqueta: "Pago de aportes sindicales", desc: "Comprobante Banco Provincia — título 'Pago' + 'Operación realizada con éxito'. SEÑAL DEFINITIVA: dice 'Nombre del Ente Abonado: UOCRA' (o 'UOCRA - Online'). Ningún otro ticket de pago tiene este campo con UOCRA. No tiene los códigos de impuestos 351/301/352 del pago_f931." },
   { id: "vep_autonomo", etiqueta: "Desestimar", desc: "VEP Autónomo / pago de monotributo o autónomos (NO se sube, se desestima)" },
   { id: "pago_autonomo", etiqueta: "Desestimar", desc: "Comprobante Banco Provincia del pago de autónomos (NO se sube, se desestima)" },
   { id: "recibo_haberes", etiqueta: "Pago de haberes", desc: "Recibo de sueldo / haberes de un empleado (UOCRA, hay apellido/nombre y CUIL del empleado, quincena y conceptos como hs trabajadas, jubilación, ley 19032, sindical)" },
-  { id: "transferencia_desempleo", etiqueta: "Fondo de desempleo", desc: "Comprobante Banco Provincia de transferencia de fondo de desempleo a un empleado (motivo VAR f.Desempleo, va junto al recibo del empleado)" },
+  { id: "transferencia_desempleo", etiqueta: "Fondo de desempleo", desc: "Comprobante Banco Provincia — el TÍTULO de la página dice 'Nueva transferencia' (no 'Pago'). Tiene 'Titular cuenta destino' (el empleado receptor), y el campo Referencia dice 'VAR f.Desempleo'. Este título 'Nueva transferencia' lo distingue claramente de pago_f931 que dice 'Pago'. El 'f.' en 'f.Desempleo' significa 'fondo', no 'formulario 931'." },
   { id: "seguro_rc_pago", etiqueta: "Pago seguro responsabilidad civil", desc: "Pago / recibo del seguro de responsabilidad civil (una sola hoja)" },
   { id: "seguro_automotor_pago", etiqueta: "Pago seguro automotor", desc: "Pago de seguro de automotor / seguro técnico del vehículo — contiene PATENTE del vehículo. Este documento se usa tanto para Pago seguro automotor como Pago seguro técnico" },
   { id: "clausula_no_repeticion", etiqueta: "Clausula no repeticion", desc: "Cláusula de no repetición de seguro" },
@@ -143,6 +143,29 @@ async function manejarMensaje(mensaje) {
   if (accion === "storage:limpiarPatronesSabana") {
     await chrome.storage.local.set({ [KEY_PATRONES_SABANA]: [] });
     return { cleared: true };
+  }
+
+  if (accion === "storage:exportarMapeo") {
+    const data = await chrome.storage.local.get([KEY_PATRONES_SABANA, KEY_MAPEOS]);
+    return {
+      version: 1,
+      exportadoEl: new Date().toISOString(),
+      patrones_sabana: data[KEY_PATRONES_SABANA] || [],
+      mapeos_aprendidos: data[KEY_MAPEOS] || {}
+    };
+  }
+
+  if (accion === "storage:importarMapeo") {
+    const payload = mensaje?.payload || {};
+    if (!payload.patrones_sabana && !payload.mapeos_aprendidos) throw new Error("Archivo inválido.");
+    const toSave = {};
+    if (Array.isArray(payload.patrones_sabana)) toSave[KEY_PATRONES_SABANA] = payload.patrones_sabana;
+    if (payload.mapeos_aprendidos && typeof payload.mapeos_aprendidos === "object") toSave[KEY_MAPEOS] = payload.mapeos_aprendidos;
+    await chrome.storage.local.set(toSave);
+    return {
+      patrones: (payload.patrones_sabana || []).length,
+      mapeos: Object.keys(payload.mapeos_aprendidos || {}).length
+    };
   }
 
   if (accion === "storage:getApiKey") {
@@ -1627,7 +1650,10 @@ REGLAS CLAVE:
 * Si la página tiene "ENTREGA DE ROPA DE TRABAJO" o "Resolución 299/11" o tabla con casco/botines/guantes → "entrega_epp".
 * Si dice "Planilla de asistencia" o "capacitación" → "capacitacion".
 * Tabla con jubilación/ley 19032/sindical/hs trabajadas → "recibo_haberes".
-* "Nueva transferencia" Banco Provincia + "VAR f.Desempleo" → "transferencia_desempleo".
+* Página con logo ARCA + recuadro "931" + tablas "REGIMEN NACIONAL DE SEGURIDAD SOCIAL" → es "f931". Es el formulario de declaración jurada, nunca un ticket de banco.
+* Banco Provincia título "Pago" + "Número de VEP" + lista impuestos con códigos 351 (CONTRIBUCIONES SEG. SOCIAL), 301 (EMPLEADOR-APORTES SEG. SOCIAL), 352 (CONTRIBUCIONES OBRA SOCIAL), 302, 312 (ART), 28 (SEGURO DE VIDA) → es "pago_f931". Estos códigos son la señal definitiva.
+* Banco Provincia título "Nueva transferencia" + campo Referencia "VAR f.Desempleo" → SIEMPRE "transferencia_desempleo". No confundir: el pago_f931 tiene códigos de impuestos 351/301/352, el transferencia_desempleo tiene "Titular cuenta destino" y "VAR f.Desempleo".
+* Banco Provincia título "Pago" + dice "Nombre del Ente Abonado: UOCRA" (o "UOCRA - Online") → es "pago_uocra". Ningún otro ticket tiene ese campo con UOCRA. Con impuestos 308/358 (autónomos) → es "pago_autonomo".
 * NUNCA pongas como empleado al titular de la empresa "MATESIN CLAUDIO FABIAN" (CUIL 20-20999512-4), excepto si la página es claramente de "MATESIN GENARO" (que sí es empleado).
 * Si la página está rotada 90° o 180°, igual leela.
 
@@ -2201,7 +2227,10 @@ REGLAS CLAVE PARA CLASIFICAR:
 * Si ves "ENTREGA DE ROPA DE TRABAJO Y ELEMENTOS DE PROTECCI\u00d3N PERSONAL" o "Resoluci\u00f3n 299/11" o una tabla con productos como casco, botines, guantes, lentes, camisa, pantal\u00f3n, chaleco \u2192 es "entrega_epp".
 * Si ves "Planilla de asistencia" o "capacitaci\u00f3n" \u2192 es "capacitacion".
 * Si ves una tabla con conceptos como jubilaci\u00f3n, ley 19032, sindical, hs trabajadas \u2192 es "recibo_haberes".
-* Si ves "Nueva transferencia" Banco Provincia + "VAR f.Desempleo" \u2192 es "transferencia_desempleo".
+* P\u00e1gina con logo ARCA + recuadro "931" + tablas "REGIMEN NACIONAL DE SEGURIDAD SOCIAL" \u2192 es "f931". Es el formulario de declaraci\u00f3n jurada, nunca un ticket de banco.
+* Banco Provincia "Pago" + "N\u00famero de VEP" + impuestos con c\u00f3digos 351/301/352/302/312 (contribuciones y aportes seg. social) \u2192 es "pago_f931". Estos c\u00f3digos son la se\u00f1al definitiva.
+* Banco Provincia "Pago" + dice "Nombre del Ente Abonado: UOCRA" (o "UOCRA - Online") \u2192 es "pago_uocra". Ning\u00fan otro ticket tiene UOCRA como ente abonado.
+* Banco Provincia "Nueva transferencia" + campo Referencia dice "VAR f.Desempleo" \u2192 es SIEMPRE "transferencia_desempleo". NUNCA "pago_f931". Son documentos distintos: uno tiene c\u00f3digos de impuestos (351/301/312), el otro tiene "Titular cuenta destino" y referencia "VAR f.Desempleo".
 * NO confundas planillas de EPP con recibos de sueldo o transferencias.
 
 PASO 2 \u2014 Extra\u00e9 datos del EMPLEADO (no de la empresa):

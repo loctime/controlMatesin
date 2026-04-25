@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "exportadoEl": "2026-04-25T20:47:25.607Z",
+  "patrones_sabana": [
+    {
+      "bloquesModal": [
+        {
+          "meta": {
+            "apellido": "",
+            "cuil": "",
+            "nombre": "",
+            "patente": "",
+            "periodo": "",
+            "tiposDetectados": []
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            1
+          ],
+          "requerimientos": [
+            "F 931"
+          ],
+          "textoEstableBloque": "CLAUDIO FABIAN MATESIN F931 ARCA DECLARACIÓN JURADA SEGURIDAD SOCIAL"
+        },
+        {
+          "meta": {
+            "apellido": "",
+            "cuil": "",
+            "nombre": "",
+            "patente": "",
+            "periodo": "",
+            "tiposDetectados": []
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            2
+          ],
+          "requerimientos": [
+            "Pago f 931"
+          ],
+          "textoEstableBloque": "DECLARACIÓN LÍNEA CONSULTA NÓMINA DECLARACIONES JURADAS MATESIN"
+        },
+        {
+          "meta": {
+            "apellido": "",
+            "cuil": "",
+            "nombre": "",
+            "patente": "",
+            "periodo": "",
+            "tiposDetectados": []
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            3,
+            4,
+            5
+          ],
+          "requerimientos": [
+            "Pago f 931"
+          ],
+          "textoEstableBloque": "ARCA Presentación DJ por Internet Acuse de Recibo F931 EMPLEADOR DJ MENSUAL VEP VOLANTE ELECTRÓNICO PAGO ARCA SICOSS EMPLEADORES SALDO DJ PAGO F931 SICOSS CONTRIBUCIONES APORTES SEGURIDAD SOCIAL BANCO PROVINCIA"
+        },
+        {
+          "meta": {
+            "apellido": "",
+            "cuil": "",
+            "nombre": "",
+            "patente": "",
+            "periodo": "",
+            "tiposDetectados": []
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            6,
+            7,
+            8
+          ],
+          "requerimientos": [
+            "Pago aportes sindicales"
+          ],
+          "textoEstableBloque": "BOLETA DEPOSITO UOCRA MATESIN CLAUDIO FABIAN CUOTA SINDICAL COMPROBANTE PRESENTACIÓN DECLARACIÓN JURADA NOMINATIVA UOCRA MATESIN CLAUDIO FABIAN PAGO UOCRA ONLINE BANCO PROVINCIA OPERACIÓN REALIZADA CON ÉXITO"
+        },
+        {
+          "meta": {
+            "apellido": "FERNANDEZ",
+            "cuil": "20-27742705-3",
+            "nombre": "DIEGO ARIEL",
+            "patente": "",
+            "periodo": "2017-09"
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            11,
+            12,
+            13
+          ],
+          "requerimientos": [
+            "Recibos de haberes ram-2026-3||FERNANDEZ",
+            "Aportes fdo. cese laboral ram-2026-3||FERNANDEZ"
+          ],
+          "textoEstableBloque": "FERNANDEZ DIEGO ARIEL RECIBO HABERES MATESIN CLAUDIO LINEAS INSTALACION FERNANDEZ DIEGO ARIEL RECIBO HABERES OFICIAL OPERADOR MATESIN RAMA RAMALLO DIEGO ARIEL FERNANDEZ NUEVA TRANSFERENCIA VAR FONDO DESEMPLEO BANCO PROVINCIA"
+        },
+        {
+          "meta": {
+            "apellido": "MATESIN",
+            "cuil": "20-40917465-6",
+            "nombre": "GENARO",
+            "patente": "",
+            "periodo": "2026-03"
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            14,
+            15,
+            16
+          ],
+          "requerimientos": [
+            "Recibos de haberes ram-2026-3||MATESIN",
+            "Aportes fdo. cese laboral ram-2026-3||MATESIN"
+          ],
+          "textoEstableBloque": "MATESIN GENARO RECIBO HABERES MATESIN CONSTRUCCION LINEAS INSTALACION MATESIN GENARO RECIBO HABERES RAMA RAMALLO LINEAS INSTALACION GENARO MATESIN NUEVA TRANSFERENCIA DESEMPLEO BANCO PROVINCIA VAR"
+        },
+        {
+          "meta": {
+            "apellido": "FERNANDEZ",
+            "cuil": "20-26761227-8",
+            "nombre": "ENRIQUE DARIO",
+            "patente": "",
+            "periodo": "2015-02"
+          },
+          "nombre": "Bloque",
+          "paginas": [
+            17,
+            18,
+            19
+          ],
+          "requerimientos": [
+            "Aportes fdo. cese laboral ram-2026-3||FERNANDEZ",
+            "Recibos de haberes ram-2026-2||FERNANDEZ"
+          ],
+          "textoEstableBloque": "FERNANDEZ ENRIQUE DARIO RECIBO HABERES MATESIN CUCARULO RAMA RAMALLO FERNANDEZ ENRIQUE DARIO RECIBO HABERES MATESIN UOCRA MARZO 2026 FERNANDEZ ENRIQUE DARIO NUEVA TRANSFERENCIA VAR FONDO DESEMPLEO MATESIN"
+        }
+      ],
+      "firmaTipos": [
+        "931",
+        "Nomina 931",
+        "Pago de 931",
+        "Pago de 931",
+        "Pago de 931",
+        "Pago de aportes sindicales",
+        "Pago de aportes sindicales",
+        "Pago de aportes sindicales",
+        "desconocido",
+        "desconocido",
+        "Pago de haberes",
+        "Pago de haberes",
+        "Fondo de desempleo",
+        "Pago de haberes",
+        "Pago de haberes",
+        "Fondo de desempleo",
+        "Pago de haberes",
+        "Pago de haberes",
+        "Fondo de desempleo"
+      ],
+      "nombre": "mapeo-2026-04-25-CamScanner 13-4-26 19.40 (3)",
+      "totalPaginas": 19,
+      "updatedAt": 1777150012809
+    }
+  ],
+  "mapeos_aprendidos": {}
+}

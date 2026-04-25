@@ -380,6 +380,45 @@
   color: #94a3b8;
 }
 
+/* ---- Tabs de modo ---- */
+.mau-modo-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.mau-tab {
+  flex: 1;
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(148,163,184,0.18);
+  background: rgba(148,163,184,0.07);
+  color: #94a3b8;
+  transition: all 0.2s;
+}
+.mau-tab:hover {
+  background: rgba(148,163,184,0.15);
+  color: #e2e8f0;
+}
+.mau-tab-active {
+  background: linear-gradient(135deg, #1e40af, #3b82f6) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+  box-shadow: 0 4px 14px rgba(59,130,246,0.3);
+}
+.mau-modo-hint {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  background: rgba(148,163,184,0.05);
+  border-radius: 8px;
+  border-left: 2px solid rgba(56,189,248,0.3);
+}
+
 /* ---- Sábana / OCR ---- */
 .mau-sabana-wrap {
   margin-bottom: 12px;

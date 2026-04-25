@@ -185,4 +185,46 @@ document.getElementById("chequear-visible").addEventListener("click", async () =
   }
 });
 
+document.getElementById("exportar-mapeo").addEventListener("click", async () => {
+  try {
+    mostrar("Exportando mapeo…", "");
+    const r = await chrome.runtime.sendMessage({ action: "storage:exportarMapeo" });
+    if (!r) throw new Error("No se pudo leer el mapeo.");
+    const json = JSON.stringify(r, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const fecha = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `matesin-mapeo-${fecha}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    const nPatrones = (r.patrones_sabana || []).length;
+    const nMapeos = Object.keys(r.mapeos_aprendidos || {}).length;
+    mostrar(`Exportado: ${nPatrones} patrón(es) de sábana, ${nMapeos} mapeo(s) aprendido(s).`, "ok");
+  } catch (e) {
+    mostrar(`Error: ${e.message}`, "err");
+  }
+});
+
+document.getElementById("importar-mapeo-btn").addEventListener("click", () => {
+  document.getElementById("importar-mapeo-input").click();
+});
+
+document.getElementById("importar-mapeo-input").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    mostrar("Importando mapeo…", "");
+    const texto = await file.text();
+    const datos = JSON.parse(texto);
+    const r = await chrome.runtime.sendMessage({ action: "storage:importarMapeo", payload: datos });
+    if (!r?.ok) throw new Error(r?.error || "No se pudo importar.");
+    mostrar(`Importado: ${r.data.patrones} patrón(es) de sábana, ${r.data.mapeos} mapeo(s).`, "ok");
+  } catch (e) {
+    mostrar(`Error al importar: ${e.message}`, "err");
+  }
+  e.target.value = "";
+});
+
 cargarConfig();

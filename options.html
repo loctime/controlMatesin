@@ -160,7 +160,13 @@
   </div>
 
   <h2>Memoria de aprendizaje</h2>
+  <p class="hint">Exportá el mapeo para hacer una copia de seguridad. Si se pierde la sesión o reinstalás Chrome, importás el archivo y listo.</p>
   <div class="acciones">
+    <button id="exportar-mapeo" type="button">⬇ Exportar mapeo</button>
+    <button id="importar-mapeo-btn" type="button" class="alt">⬆ Importar mapeo</button>
+    <input id="importar-mapeo-input" type="file" accept=".json" style="display:none;" />
+  </div>
+  <div class="acciones" style="margin-top:8px;">
     <button id="limpiar" type="button" class="alt">Limpiar memoria de mapeos</button>
     <button id="limpiar-sabana" type="button" class="alt">Limpiar patrones de sábana</button>
   </div>
