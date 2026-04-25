@@ -173,6 +173,11 @@
       const partes = nombreCompleto.trim().split(/\s+/);
       apellido = partes[0] || "";
       nombre = partes.slice(1).join(" ") || "";
+    } else {
+      // Fallback: extraer la primera palabra en mayúsculas del texto completo
+      // para tener al menos algo de apellido para desambiguar.
+      const primeraMayus = textoCompleto.match(/\b([A-ZÁÉÍÓÚÑ]{3,})\b/);
+      if (primeraMayus) apellido = primeraMayus[1];
     }
     return { textoCompleto, apellido, nombre, cuil, contrato };
   }
@@ -257,7 +262,10 @@
         }
       }
       const fechaTxt = (tr.textContent.match(/(\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2})?)/) || [])[1] || "";
-      const clave = `${nombre}||${recursoData.apellido}||${recursoData.nombre}`.toLowerCase();
+      // Usar el href del link como clave primaria: cada fila del sitio tiene URL única,
+      // lo que evita que filas con mismo nombre de requerimiento se sobreescriban cuando
+      // parsearRecurso no puede extraer el apellido del empleado.
+      const clave = link.href || `${nombre}||${recursoData.apellido}||${recursoData.nombre}`.toLowerCase();
       const actual = mapa.get(clave);
       const ts = parsearFechaSitio(fechaTxt);
       if (!actual || ts > (actual.ts || 0)) {
@@ -289,7 +297,13 @@
       reqs = [];
       const vacios = { textoCompleto: "", apellido: "", nombre: "", cuil: "", contrato: "" };
       for (const nombre of nombresSobre) {
-        const matches = Array.from(mapaTabla.values()).filter(e => e.nombre === nombre);
+        // Match exacto primero; si no hay, match por prefijo (el sobre da el nombre corto
+        // y la tabla incluye el período: "F 931" → "F 931-2026-3 (0/1)").
+        let matches = Array.from(mapaTabla.values()).filter(e => e.nombre === nombre);
+        if (!matches.length) {
+          const prefijo = nombre.toLowerCase();
+          matches = Array.from(mapaTabla.values()).filter(e => e.nombre.toLowerCase().startsWith(prefijo));
+        }
         if (matches.length > 0) {
           reqs.push(...matches.map(m => ({ nombre: m.nombre, link: m.link, recurso: m.recurso })));
         } else {
@@ -484,6 +498,18 @@
     mostrarToast._t = setTimeout(() => {
       ui.toast.hidden = true;
     }, 4500);
+  }
+
+  function alertarErrorOcr(e) {
+    const msg = e?.message || String(e);
+    const esApiKey = /api.?key|anthropic|cargala/i.test(msg);
+    if (esApiKey) {
+      mostrarToast("⚠️ API Key de Anthropic no configurada. Andá a Opciones de la extensión y cargala.");
+      alert("Falta la API Key de Anthropic.\n\nAbrí las Opciones de la extensión y pegá tu clave para que Claude pueda leer los documentos.");
+    } else {
+      mostrarToast(`Error al procesar con Claude: ${msg}`);
+    }
+    console.error("[MAU] Error OCR:", e);
   }
 
   /**
@@ -861,7 +887,7 @@
       }
       ui.pText.textContent = "Revisá bloques y nombre del patrón, luego confirmá.";
     } catch (e) {
-      console.error("[MAU] Error OCR sábana:", e);
+      alertarErrorOcr(e);
       ui.pText.textContent = `Error: ${e.message || e}`;
     } finally {
       if (btn) btn.disabled = false;
@@ -912,14 +938,37 @@
    * @param {Object} [metadata] - Metadata OCR: { apellido, nombre, cuil, patente }.
    */
   function asignarArchivoARequerimiento(nombreReq, archivo, metadata) {
+    // Soporta clave compuesta "nombre||apellido" generada por el modal cuando hay duplicados.
+    let apellidoForzado = null;
+    if (nombreReq.includes("||")) {
+      const partes = nombreReq.split("||");
+      nombreReq = partes[0];
+      apellidoForzado = partes[1];
+    }
+    if (apellidoForzado) {
+      metadata = Object.assign({}, metadata || {}, { apellido: apellidoForzado });
+    }
+
     console.log(`[MAU][ASIGNAR] === Inicio asignación ===`);
     console.log(`[MAU][ASIGNAR] Archivo: "${archivo.name}" → Requerimiento buscado: "${nombreReq}"`);
     console.log(`[MAU][ASIGNAR] Metadata:`, JSON.stringify(metadata || null));
     console.log(`[MAU][ASIGNAR] Total filas en estado: ${estado.filas.length}`);
 
-    const filasCoincidentes = estado.filas.filter(
+    let filasCoincidentes = estado.filas.filter(
       (f) => f.tipo === "requerimiento" && f.requerimiento === nombreReq
     );
+
+    // Fallback: si no coincide exacto, buscar ignorando el sufijo de período (-2026-3, -2026-2, etc.)
+    if (filasCoincidentes.length === 0) {
+      const quitarPeriodo = (s) => (s || "").replace(/-\d{4}-\d+.*$/i, "").trim();
+      const baseNombreReq = quitarPeriodo(nombreReq);
+      filasCoincidentes = estado.filas.filter(
+        (f) => f.tipo === "requerimiento" && quitarPeriodo(f.requerimiento) === baseNombreReq
+      );
+      if (filasCoincidentes.length > 0) {
+        console.log(`[MAU][ASIGNAR] Match por nombre base (sin período): "${baseNombreReq}" → ${filasCoincidentes.length} fila(s)`);
+      }
+    }
 
     console.log(`[MAU][ASIGNAR] Filas coincidentes con "${nombreReq}": ${filasCoincidentes.length}`);
     filasCoincidentes.forEach((f, i) => {
@@ -1324,6 +1373,27 @@
     mostrarToast("Mirá la fila resaltada en la página para leer el detalle.");
   }
 
+  async function expandirTablaCompleta() {
+    try {
+      const selectMostrar = document.querySelector("select[name='tblRequerimientos_length']");
+      if (!selectMostrar) {
+        console.warn("[MAU] No se encontró el select 'Mostrar X requerimientos'.");
+        return;
+      }
+      if (selectMostrar.value === "-1") {
+        console.log("[MAU] Tabla ya mostrando todos los registros.");
+        return;
+      }
+      console.log("[MAU] Expandiendo tabla a TODOS los registros antes de procesar...");
+      selectMostrar.value = "-1";
+      selectMostrar.dispatchEvent(new Event("change", { bubbles: true }));
+      await dormir(2500);
+      console.log("[MAU] Tabla expandida a todos los registros.");
+    } catch (e) {
+      console.warn("[MAU] Error al expandir tabla:", e);
+    }
+  }
+
   async function procesarTodo() {
     const items = estado.filas.filter((f) => f.archivo && f.requerimiento && f.estado !== "sin-asignar");
     console.log(`[MAU][PROCESAR] ======= INICIO procesarTodo =======`);
@@ -1337,6 +1407,9 @@
     if (duplicados.length) {
       console.warn(`[MAU][PROCESAR] ⚠⚠⚠ ARCHIVOS DUPLICADOS DETECTADOS: ${[...new Set(duplicados)].join(', ')}`);
     }
+
+    // Expandir tabla para asegurarse de que todos los requerimientos estén en el DOM
+    await expandirTablaCompleta();
 
     let ok = 0, err = 0, skip = 0;
     for (let i = 0; i < items.length; i++) {
@@ -1354,7 +1427,7 @@
           const linkVivo = buscarLinkRequerimientoVivo(item.requerimiento, item.recurso);
           if (linkVivo) return { nombre: item.requerimiento, link: linkVivo, recurso: item.recurso };
           const encontrado = estado.requerimientos.find((r) => r.nombre === item.requerimiento);
-          if (!encontrado) throw new Error("No se encontró link del requerimiento.");
+          if (!encontrado || !encontrado.link) throw new Error("No se encontró el requerimiento en la página. Verificá que la tabla esté cargada y el filtro incluya este requerimiento.");
           return encontrado;
         });
         await ejecutarPaso(item, "abrir requerimiento", async () => reqObj.link.click());
@@ -1445,14 +1518,15 @@
         try {
           console.log("[MAU] Cerrando borrador:", nombre);
           link.click();
-          await dormir(2500);
+          // Esperar más tiempo para que el popup cargue completamente
+          await dormir(4000);
           // Buscar Enviar dentro del fancybox
           const iframe = document.querySelector("iframe.fancybox-iframe");
           const docPop = iframe?.contentDocument || iframe?.contentWindow?.document;
           if (!docPop) { console.warn("[MAU] No abrió el popup."); await cerrarFancyboxAbierto(); continue; }
-          // Inyectar parche confirm
-          try { inyectarParcheConfirmEnArbolAccesible(); } catch (e) {}
-          await dormir(500);
+          // Inyectar parche confirm en todos los iframes accesibles
+          try { await inyectarParcheConfirmEnArbolAccesible(); } catch (e) {}
+          await dormir(1000);
           // Buscar el botón Enviar (exacto, en el iframe)
           const docs = [];
           const recorrer = (d) => {
@@ -1463,19 +1537,21 @@
           recorrer(docPop);
           let btnEnviar = null;
           for (const d of docs) {
-            btnEnviar = Array.from(d.querySelectorAll("a,button,input[type=button],input[type=submit]"))
-              .find((el) => (el.textContent || el.value || "").trim().toLowerCase() === "enviar");
+            const candidatos = Array.from(d.querySelectorAll("a,button,input[type=button],input[type=submit]"));
+            console.log("[MAU] Botones en popup:", candidatos.map(el => `"${(el.textContent || el.value || "").trim()}"`).join(", "));
+            btnEnviar = candidatos.find((el) => (el.textContent || el.value || "").trim().toLowerCase() === "enviar")
+              || candidatos.find((el) => (el.textContent || el.value || "").toLowerCase().includes("enviar"));
             if (btnEnviar) break;
           }
           if (btnEnviar) {
             console.log("[MAU] Click en Enviar (pasada final).");
             btnEnviar.click();
-            await dormir(4000);
+            await dormir(6000);
           } else {
             console.warn("[MAU] No se encontró botón Enviar en el popup de:", nombre);
           }
           await cerrarFancyboxAbierto();
-          await dormir(1500);
+          await dormir(2000);
         } catch (e) {
           console.warn("[MAU] Error cerrando borrador", nombre, e);
           try { await cerrarFancyboxAbierto(); } catch {}
@@ -1541,7 +1617,13 @@
         const link = tr.querySelector("a");
         if (!link) continue;
         const nombreLink = textoPlano(link.textContent || "");
-        if (nombreLink !== nombreReq) continue;
+        const quitarPer = (s) => (s || "").replace(/-\d{4}-\d+.*$/i, "").trim();
+        const linkBase = quitarPer(nombreLink);
+        const reqBase  = quitarPer(nombreReq);
+        const coincideNombre = nombreLink === nombreReq
+          || nombreLink.startsWith(nombreReq) || nombreReq.startsWith(nombreLink)
+          || linkBase === reqBase;
+        if (!coincideNombre) continue;
         if (!recursoEsperado || !recursoEsperado.apellido) return link;
         const celdas = tr.querySelectorAll(":scope > td");
         if (idxRecurso >= 0 && celdas[idxRecurso]) {
@@ -2409,11 +2491,12 @@
       bloquesIniciales,
       nombrePatron: patronElegido?.nombre || "",
       onConfirm: async (bloques, numPaginas) => {
-        // Leer texto de cada bloque con Claude para poder hacer matching por contenido luego
-        ui.pText.textContent = "Leyendo contenido de las páginas con Claude…";
+        // Claude es obligatorio: lee cada página para saber de quién es el documento
+        // (apellido, CUIL, patente) y para guardar el texto de referencia del patrón.
         const paginasUnicas = [...new Set(bloques.flatMap((b) => b.paginas))].sort((a, b) => a - b);
         let textosPorPagina = [];
         try {
+          ui.pText.textContent = "Leyendo contenido de las páginas con Claude…";
           textosPorPagina = await window.MAUOcrEngine.extraerTextoPorPagina(
             file,
             (info) => {
@@ -2425,20 +2508,32 @@
             { paginasEspecificas: paginasUnicas }
           );
         } catch (e) {
-          console.warn("[MAU] No se pudo leer texto de los bloques:", e);
+          alertarErrorOcr(e);
+          ui.pText.textContent = "Sin procesamiento en curso";
+          return; // No continuar sin Claude
         }
 
-        // Armar texto estable por bloque (concatena textoEstable de sus páginas)
+        // Armar texto estable por bloque y poblar meta desde OCR de Claude.
+        // La meta (apellido, cuil, patente, etc.) viene de la primera página del bloque
+        // que tenga datos relevantes — esto permite que asignarArchivoARequerimiento
+        // elija la fila correcta cuando hay varios empleados con el mismo requerimiento.
         const bloquesConTexto = bloques.map((b) => {
           const textoBloque = b.paginas
             .map((p) => textosPorPagina.find((t) => t.pagina === p)?.textoEstable || "")
             .filter(Boolean)
             .join(" ");
+          const metaPagina = b.paginas
+            .map((p) => textosPorPagina.find((t) => t.pagina === p))
+            .find((t) => t && (t.apellido || t.cuil || t.patente));
+          const meta = metaPagina
+            ? { apellido: metaPagina.apellido || "", nombre: metaPagina.nombre || "", cuil: metaPagina.cuil || "", patente: metaPagina.patente || "", periodo: metaPagina.periodo || "" }
+            : (b.meta || {});
           return {
             nombre: b.nombre,
             paginas: b.paginas,
             requerimientos: b.requerimientos,
-            textoEstableBloque: textoBloque
+            textoEstableBloque: textoBloque,
+            meta
           };
         });
 
@@ -2460,7 +2555,7 @@
           console.warn("[MAU] No se pudo guardar el patrón:", err);
         }
         resetSabanaUi();
-        await aplicarBloquesModal(file, bloques);
+        await aplicarBloquesModal(file, bloquesConTexto);
       }
     });
   }

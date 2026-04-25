@@ -139,6 +139,9 @@
           textoEstable: resultado?.textoEstable || ""
         });
       } catch (e) {
+        // Si es error de API Key o configuración, relanzar de inmediato — no tiene sentido
+        // seguir procesando el resto de las páginas sin Claude.
+        if (/api.?key|anthropic|cargala/i.test(e?.message || "")) throw e;
         console.warn(`[MAU] Error clasificando página ${i}:`, e);
         salida.push({
           pagina: i,

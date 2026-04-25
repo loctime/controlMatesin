@@ -198,7 +198,6 @@
     textosPorPagina: [],
     seleccion: new Set(),
     bloques: [],
-    nextId: 1,
     requerimientos: [],
     bloquesIniciales: [],
     nombrePatron: "",
@@ -212,7 +211,6 @@
     ctx.textosPorPagina = [];
     ctx.seleccion.clear();
     ctx.bloques = [];
-    ctx.nextId = 1;
     ctx.requerimientos = [];
     ctx.bloquesIniciales = [];
     ctx.nombrePatron = "";
@@ -234,7 +232,6 @@
     ctx.onConfirm = typeof onConfirm === "function" ? onConfirm : null;
     ctx.seleccion = new Set();
     ctx.bloques = [];
-    ctx.nextId = 1;
 
     renderShell();
     await renderThumbnails();
@@ -242,9 +239,16 @@
     if (ctx.bloquesIniciales.length) cargarBloquesIniciales();
   }
 
+  function siguienteId() {
+    const usados = new Set(ctx.bloques.map((b) => b.id));
+    let n = 1;
+    while (usados.has(n)) n++;
+    return n;
+  }
+
   function cargarBloquesIniciales() {
-    ctx.bloques = ctx.bloquesIniciales.map((b) => ({
-      id: ctx.nextId++,
+    ctx.bloques = ctx.bloquesIniciales.map((b, i) => ({
+      id: i + 1,
       nombre: b.nombre || "Bloque",
       paginas: [...(b.paginas || [])],
       requerimientos: [...(b.requerimientos || [])],
@@ -559,7 +563,7 @@
     const nombreSugerido = sugerirNombreBloque(paginas, meta);
 
     ctx.bloques.push({
-      id: ctx.nextId++,
+      id: siguienteId(),
       nombre: nombreSugerido,
       paginas,
       requerimientos: [],
@@ -614,13 +618,24 @@
         b.meta.periodo && `Período: ${b.meta.periodo}`
       ].filter(Boolean).join(" · ");
 
+      // Detectar nombres duplicados para generar UIDs compuestos.
+      const conteoNombres = {};
+      (ctx.requerimientos || []).forEach((r) => { conteoNombres[r.nombre] = (conteoNombres[r.nombre] || 0) + 1; });
+      const uidReq = (r) => {
+        if (conteoNombres[r.nombre] > 1 && r.recurso?.apellido) return `${r.nombre}||${r.recurso.apellido}`;
+        return r.nombre;
+      };
+
       const reqsHtml = (ctx.requerimientos || []).map((r) => {
-        const checked = b.requerimientos.includes(r.nombre) ? "checked" : "";
-        // Mostrar recurso (empleado) si está disponible.
+        const uid = uidReq(r);
+        const checked = (b.requerimientos.includes(uid) || (uid !== r.nombre && b.requerimientos.includes(r.nombre))) ? "checked" : "";
         const recursoLabel = r.recurso && (r.recurso.apellido || r.recurso.nombre)
-          ? ` <span style="color:#888;font-size:11px;">(${[r.recurso.apellido, r.recurso.nombre].filter(Boolean).join(" ")})</span>`
+          ? ` <span style="color:#888;font-size:11px;">${[r.recurso.apellido, r.recurso.nombre].filter(Boolean).join(" ")}</span>`
           : "";
-        return `<label><input type="checkbox" data-req="${escapeHtml(r.nombre)}" ${checked}/> ${escapeHtml(r.nombre)}${recursoLabel}</label>`;
+        const labelTexto = conteoNombres[r.nombre] > 1
+          ? `${escapeHtml(r.nombre)}${recursoLabel || " <span style=\"color:#888;font-size:11px;\">(sin datos de recurso)</span>"}`
+          : `${escapeHtml(r.nombre)}${recursoLabel}`;
+        return `<label><input type="checkbox" data-req="${escapeHtml(uid)}" ${checked}/> ${labelTexto}</label>`;
       }).join("") || `<div style="font-size:11px;color:#888;">No hay requerimientos detectados en la bandeja.</div>`;
 
       div.innerHTML = `
@@ -673,11 +688,13 @@
       if (!b) return;
       div.querySelectorAll("input[type=checkbox]").forEach((chk) => {
         chk.addEventListener("change", () => {
-          const nombre = chk.dataset.req;
+          const uid = chk.dataset.req;
+          const baseNombre = uid.split("||")[0];
           if (chk.checked) {
-            if (!b.requerimientos.includes(nombre)) b.requerimientos.push(nombre);
+            if (!b.requerimientos.includes(uid)) b.requerimientos.push(uid);
           } else {
-            b.requerimientos = b.requerimientos.filter((n) => n !== nombre);
+            // Eliminar uid y cualquier entrada legacy con el nombre base.
+            b.requerimientos = b.requerimientos.filter((n) => n !== uid && n !== baseNombre);
           }
         });
       });
