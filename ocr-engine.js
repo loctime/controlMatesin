@@ -122,7 +122,8 @@
           apellido: resultado?.apellido || "",
           nombre: resultado?.nombre || "",
           patente: resultado?.patente || "",
-          periodo: resultado?.periodo || ""
+          periodo: resultado?.periodo || "",
+          textoEstable: resultado?.textoEstable || ""
         });
       } catch (e) {
         console.warn(`[MAU] Error clasificando página ${i}:`, e);
@@ -135,7 +136,8 @@
           apellido: "",
           nombre: "",
           patente: "",
-          periodo: ""
+          periodo: "",
+          textoEstable: ""
         });
       }
 

@@ -74,42 +74,6 @@ async function manejarMensaje(mensaje) {
   const accion = mensaje?.action;
   if (!accion) throw new Error("Mensaje sin acción.");
 
-  if (accion === "storage:leerMapeosV2") {
-    const data = await chrome.storage.local.get("matesin_mapeos_v2");
-    return data["matesin_mapeos_v2"] || [];
-  }
-
-  if (accion === "storage:guardarMapeoV2") {
-    const mapeo = mensaje?.payload || {};
-    if (!mapeo.requerimiento) throw new Error("Falta el requerimiento en el mapeo.");
-    const data = await chrome.storage.local.get("matesin_mapeos_v2");
-    const lista = data["matesin_mapeos_v2"] || [];
-    // Evitar duplicados exactos (mismo tipoDoc + persona + requerimiento)
-    const existe = lista.findIndex(
-      (m) => normalizar(m.tipoDoc || "") === normalizar(mapeo.tipoDoc || "") &&
-             normalizar(m.persona || "") === normalizar(mapeo.persona || "") &&
-             normalizar(m.requerimiento || "") === normalizar(mapeo.requerimiento || "")
-    );
-    if (existe >= 0) {
-      // Actualizar el existente con el texto estable nuevo
-      lista[existe] = { ...lista[existe], ...mapeo, updatedAt: Date.now() };
-    } else {
-      lista.push({ ...mapeo, createdAt: Date.now() });
-    }
-    await chrome.storage.local.set({ "matesin_mapeos_v2": lista });
-    return lista;
-  }
-
-  if (accion === "storage:eliminarMapeoV2") {
-    const indice = mensaje?.payload?.indice;
-    if (typeof indice !== "number") throw new Error("Índice inválido.");
-    const data = await chrome.storage.local.get("matesin_mapeos_v2");
-    const lista = data["matesin_mapeos_v2"] || [];
-    lista.splice(indice, 1);
-    await chrome.storage.local.set({ "matesin_mapeos_v2": lista });
-    return lista;
-  }
-
   if (accion === "storage:getMemory") {
     const data = await chrome.storage.local.get(KEY_MAPEOS);
     return data[KEY_MAPEOS] || {};
@@ -2240,15 +2204,16 @@ PASO 2 \u2014 Extra\u00e9 datos del EMPLEADO (no de la empresa):
 - nombre: nombre del EMPLEADO.
 - patente: patente del veh\u00edculo (ABC123 o AB123CD) solo si es seguro automotor.
 - periodo: per\u00edodo en formato YYYY-MM si aparece.
+- textoEstable: entre 5 y 12 palabras clave estables que identifiquen ESTE documento y ESTA persona espec\u00edfica. Inclu\u00ed nombre/apellido del empleado, t\u00edtulo del formulario o tipo de documento, empresa si es relevante. EXCLU\u00cd: fechas, montos, n\u00fameros de transacci\u00f3n, VEP, per\u00edodos, CBU. Ejemplo: "LOPEZ JUAN RECIBO HABERES MATESIN" o "GOMEZ PEDRO ENTREGA EPP RESOLUCI\u00d3N 299" o "RODRIGUEZ ANA DECLARACI\u00d3N F931 BUNGE".
 
 Respond\u00e9 SOLO con un JSON v\u00e1lido (sin markdown, sin explicaciones, sin bloques de c\u00f3digo):
-{"id":"xxx","cuil":"","apellido":"","nombre":"","patente":"","periodo":""}
+{"id":"xxx","cuil":"","apellido":"","nombre":"","patente":"","periodo":"","textoEstable":""}
 
 Si un dato no aplica o no aparece, dejalo como "". Si no pod\u00e9s identificar el tipo, us\u00e1 "desconocido".`;
 
   const body = {
     model: modelo,
-    max_tokens: 200,
+    max_tokens: 400,
     messages: [
       {
         role: "user",
@@ -2301,6 +2266,7 @@ Si un dato no aplica o no aparece, dejalo como "". Si no pod\u00e9s identificar 
     nombre: String(parsed?.nombre || "").trim(),
     patente: String(parsed?.patente || "").trim(),
     periodo: String(parsed?.periodo || "").trim(),
+    textoEstable: String(parsed?.textoEstable || "").trim(),
     raw: textoRespuesta
   };
 }
