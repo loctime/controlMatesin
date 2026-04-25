@@ -30,6 +30,10 @@
     await enviarMensajeExtension({ action: "storage:limpiarPatronesSabana" });
   }
 
+  async function guardarPatronesSabana(lista) {
+    await enviarMensajeExtension({ action: "storage:guardarPatronesSabana", payload: lista });
+  }
+
   function normalizar(texto) {
     return (texto || "")
       .toLowerCase()
@@ -46,6 +50,7 @@
     limpiarMemoria,
     leerPatronesSabana,
     guardarPatronSabana,
+    guardarPatronesSabana,
     limpiarPatronesSabana,
     normalizar
   };

@@ -122,10 +122,21 @@ async function manejarMensaje(mensaje) {
     const idx = arr.findIndex((p) => p.nombre === nombre);
     const entry = { nombre, updatedAt: Date.now() };
     if (tieneViejo) { entry.bloques = bloques; entry.firma = firma; }
-    if (tieneNuevo) { entry.bloquesModal = bloquesModal; entry.firmaTipos = firmaTipos; }
+    if (tieneNuevo) {
+      entry.bloquesModal = bloquesModal;
+      entry.firmaTipos = firmaTipos;
+      if (payload.totalPaginas != null) entry.totalPaginas = payload.totalPaginas;
+    }
     if (idx >= 0) arr[idx] = entry;
     else arr.push(entry);
     await chrome.storage.local.set({ [KEY_PATRONES_SABANA]: arr });
+    return { saved: true };
+  }
+
+  if (accion === "storage:guardarPatronesSabana") {
+    const lista = mensaje?.payload;
+    if (!Array.isArray(lista)) throw new Error("Se esperaba un array de patrones.");
+    await chrome.storage.local.set({ [KEY_PATRONES_SABANA]: lista });
     return { saved: true };
   }
 
