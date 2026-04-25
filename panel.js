@@ -2133,6 +2133,53 @@
     throw new Error("Timeout esperando que cargue el popup del requerimiento.");
   }
 
+  function buscarMejorPatron(patrones, firmaTipos, textos) {
+    const normStr = (s) =>
+      (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+    const multisetIgual = (a, b) => {
+      if (a.length !== b.length) return false;
+      const sa = [...a].sort();
+      const sb = [...b].sort();
+      return sa.every((v, i) => v === sb[i]);
+    };
+
+    const puntuar = (patron) => {
+      if (!Array.isArray(patron.bloquesModal) || !patron.bloquesModal.length) return -1;
+
+      const tiposGuardados = Array.isArray(patron.firmaTipos) ? patron.firmaTipos : [];
+      if (tiposGuardados.length > 0) {
+        // Patrón creado con Claude: comparar tipos en cualquier orden
+        if (!multisetIgual(tiposGuardados, firmaTipos)) return -1;
+      } else {
+        // Patrón creado sin Claude: comparar por cantidad de páginas
+        const totalGuardado = patron.totalPaginas ||
+          Math.max(0, ...(patron.bloquesModal.flatMap((b) => b.paginas || []).concat([0])));
+        if (totalGuardado > 0 && totalGuardado !== firmaTipos.length) return -1;
+      }
+
+      // Desambiguación por texto: palabras del OCR que aparecen en el patrón
+      const textoDocumento = textos
+        .map((t) => [t.textoEstable, t.apellido, t.nombre, t.cuil].filter(Boolean).join(" "))
+        .join(" ");
+      const wordsDoc = new Set(normStr(textoDocumento).split(/\s+/).filter((w) => w.length > 2));
+
+      const textoPatron = patron.bloquesModal
+        .flatMap((b) => [b.nombre, ...(b.requerimientos || [])])
+        .join(" ");
+      const wordsPatron = normStr(textoPatron).split(/\s+/).filter((w) => w.length > 2);
+
+      return wordsPatron.filter((w) => wordsDoc.has(w)).length;
+    };
+
+    const candidatos = patrones
+      .map((p) => ({ patron: p, score: puntuar(p) }))
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => b.score - a.score);
+
+    return candidatos[0]?.patron || null;
+  }
+
   async function analizarSabana() {
     const file = estado.sabanaPendiente;
     if (!file) {
@@ -2157,14 +2204,7 @@
 
       const firmaTipos = textos.map((t) => t.etiqueta || "desconocido");
       const patrones = (await window.MAUStorage.leerPatronesSabana()) || [];
-      const match = patrones.find(
-        (p) =>
-          Array.isArray(p.firmaTipos) &&
-          p.firmaTipos.length === firmaTipos.length &&
-          p.firmaTipos.every((e, i) => e === firmaTipos[i]) &&
-          Array.isArray(p.bloquesModal) &&
-          p.bloquesModal.length
-      );
+      const match = buscarMejorPatron(patrones, firmaTipos, textos);
 
       if (match) {
         mostrarToast(`Patrón «${match.nombre}» encontrado. Aplicando…`);
@@ -2265,11 +2305,12 @@
     await window.MAUModalSeleccion.abrir({
       file,
       requerimientos: estado.requerimientos,
-      onConfirm: async (bloques) => {
+      onConfirm: async (bloques, numPaginas) => {
         try {
           await window.MAUStorage.guardarPatronSabana({
             nombre: nombrePatron,
             firmaTipos: [],
+            totalPaginas: numPaginas || 0,
             bloquesModal: bloques.map((b) => ({
               nombre: b.nombre,
               paginas: b.paginas,

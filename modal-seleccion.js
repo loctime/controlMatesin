@@ -682,9 +682,10 @@
       }));
 
     const onConfirm = ctx.onConfirm;
+    const numPaginas = ctx.numPaginas;
     limpiar();
     if (onConfirm) {
-      try { await onConfirm(bloquesSalida); }
+      try { await onConfirm(bloquesSalida, numPaginas); }
       catch (e) { console.error("[MAU modal] onConfirm error:", e); alert("Error al procesar: " + (e?.message || e)); }
     }
   }
