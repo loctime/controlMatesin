@@ -2180,6 +2180,43 @@
     return candidatos[0]?.patron || null;
   }
 
+  function remapearBloquesPorTexto(bloquesPatron, textos) {
+    const normStr = (s) =>
+      (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+    // Verificar si el patrón tiene texto guardado por bloque
+    const tieneTexto = bloquesPatron.some((b) => b.textoEstableBloque && b.textoEstableBloque.trim().length > 5);
+    if (!tieneTexto) return bloquesPatron; // sin texto → usar posiciones originales
+
+    // Para cada par (página nueva, bloque guardado), calcular similitud de texto
+    const scores = textos.map((t) => {
+      const textoPagina = normStr([t.textoEstable, t.apellido, t.nombre, t.cuil].filter(Boolean).join(" "));
+      const wordsPagina = new Set(textoPagina.split(/\s+/).filter((w) => w.length > 2));
+
+      const scoresPorBloque = bloquesPatron.map((b, bi) => {
+        const textoBloque = normStr(b.textoEstableBloque || "");
+        const wordsBloque = textoBloque.split(/\s+/).filter((w) => w.length > 2);
+        const score = wordsBloque.filter((w) => wordsPagina.has(w)).length;
+        return { bi, score };
+      });
+
+      const mejor = scoresPorBloque.sort((a, b) => b.score - a.score)[0];
+      return { pagina: t.pagina, bi: mejor.score > 0 ? mejor.bi : -1, score: mejor.score };
+    });
+
+    // Asignar cada página al bloque de mayor score (greedy, sin duplicar bloques)
+    // Cada página va al bloque con mejor score; páginas con score 0 quedan sin asignar
+    const nuevasPaginas = bloquesPatron.map(() => []);
+    for (const { pagina, bi } of scores) {
+      if (bi >= 0) nuevasPaginas[bi].push(pagina);
+    }
+
+    return bloquesPatron.map((b, bi) => ({
+      ...b,
+      paginas: nuevasPaginas[bi].length ? nuevasPaginas[bi].sort((a, c) => a - c) : b.paginas
+    }));
+  }
+
   async function analizarSabana() {
     const file = estado.sabanaPendiente;
     if (!file) {
@@ -2207,9 +2244,11 @@
       const match = buscarMejorPatron(patrones, firmaTipos, textos);
 
       if (match) {
+        // Reasignar páginas por contenido de texto (ignora el orden original)
+        const bloquesRemapeados = remapearBloquesPorTexto(match.bloquesModal, textos);
         mostrarToast(`Patrón «${match.nombre}» encontrado. Aplicando…`);
         ui.pText.textContent = `Patrón «${match.nombre}» aplicado automáticamente.`;
-        await aplicarBloquesModal(file, match.bloquesModal);
+        await aplicarBloquesModal(file, bloquesRemapeados);
       } else {
         mostrarToast("No se encontró un patrón para esta sábana. Usá 'Crear / Ajustar mapeo' primero.");
         ui.pText.textContent = "Sin patrón guardado para esta sábana. Creá uno con 'Crear / Ajustar mapeo'.";
@@ -2370,18 +2409,53 @@
       bloquesIniciales,
       nombrePatron: patronElegido?.nombre || "",
       onConfirm: async (bloques, numPaginas) => {
+        // Leer texto de cada bloque con Claude para poder hacer matching por contenido luego
+        ui.pText.textContent = "Leyendo contenido de las páginas con Claude…";
+        const paginasUnicas = [...new Set(bloques.flatMap((b) => b.paginas))].sort((a, b) => a - b);
+        let textosPorPagina = [];
+        try {
+          textosPorPagina = await window.MAUOcrEngine.extraerTextoPorPagina(
+            file,
+            (info) => {
+              if (info.pagina != null) {
+                actualizarProgreso(info.pagina, info.totalPaginas, info.mensaje || "");
+                ui.pInner.style.width = `${Math.round((info.pagina / info.totalPaginas) * 100)}%`;
+              }
+            },
+            { paginasEspecificas: paginasUnicas }
+          );
+        } catch (e) {
+          console.warn("[MAU] No se pudo leer texto de los bloques:", e);
+        }
+
+        // Armar texto estable por bloque (concatena textoEstable de sus páginas)
+        const bloquesConTexto = bloques.map((b) => {
+          const textoBloque = b.paginas
+            .map((p) => textosPorPagina.find((t) => t.pagina === p)?.textoEstable || "")
+            .filter(Boolean)
+            .join(" ");
+          return {
+            nombre: b.nombre,
+            paginas: b.paginas,
+            requerimientos: b.requerimientos,
+            textoEstableBloque: textoBloque
+          };
+        });
+
+        // Firma de tipos (clasificación por página)
+        const firmaTiposNueva = Array.from({ length: numPaginas || 0 }, (_, i) => {
+          const t = textosPorPagina.find((x) => x.pagina === i + 1);
+          return t?.etiqueta || "desconocido";
+        });
+
         try {
           await window.MAUStorage.guardarPatronSabana({
             nombre: nombreBase,
-            firmaTipos: patronElegido?.firmaTipos || [],
+            firmaTipos: firmaTiposNueva,
             totalPaginas: numPaginas || 0,
-            bloquesModal: bloques.map((b) => ({
-              nombre: b.nombre,
-              paginas: b.paginas,
-              requerimientos: b.requerimientos
-            }))
+            bloquesModal: bloquesConTexto
           });
-          mostrarToast(`Mapeo guardado: ${bloques.length} bloque(s).`);
+          mostrarToast(`Mapeo guardado: ${bloques.length} bloque(s) con texto.`);
         } catch (err) {
           console.warn("[MAU] No se pudo guardar el patrón:", err);
         }

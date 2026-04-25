@@ -68,21 +68,34 @@
     const data = new Uint8Array(await file.arrayBuffer());
     const pdf = await window.pdfjsLib.getDocument({ data }).promise;
     const numPages = pdf.numPages;
-    const maxPaginas = Math.max(1, Math.min(opciones?.maxPaginas || numPages, numPages));
-    const scale = 200 / 72; // 200 DPI para mejor lectura de escaneos rotados
+
+    // paginasEspecificas: array de números de página a procesar (1-based).
+    // Si no se pasa, procesa desde 1 hasta maxPaginas.
+    const especificas = Array.isArray(opciones?.paginasEspecificas)
+      ? opciones.paginasEspecificas.filter((n) => n >= 1 && n <= numPages)
+      : null;
+    const maxPaginas = especificas
+      ? numPages
+      : Math.max(1, Math.min(opciones?.maxPaginas || numPages, numPages));
+    const totalAProcesar = especificas ? especificas.length : maxPaginas;
+
+    const scale = 200 / 72;
 
     const reportar = (info) => {
       if (typeof onProgress === "function") onProgress(info);
     };
 
-    reportar({ fase: "inicio", totalPaginas: maxPaginas, mensaje: "Iniciando análisis con Claude…" });
+    reportar({ fase: "inicio", totalPaginas: totalAProcesar, mensaje: "Iniciando análisis con Claude…" });
 
     const salida = [];
-    for (let i = 1; i <= maxPaginas; i++) {
+    const paginasAIterar = especificas || Array.from({ length: maxPaginas }, (_, k) => k + 1);
+    let idx = 0;
+    for (const i of paginasAIterar) {
+      idx++;
       reportar({
         fase: "render",
-        pagina: i,
-        totalPaginas: numPages,
+        pagina: idx,
+        totalPaginas: totalAProcesar,
         mensaje: `Preparando página ${i} de ${numPages}…`
       });
 
@@ -103,9 +116,9 @@
 
       reportar({
         fase: "ia",
-        pagina: i,
-        totalPaginas: numPages,
-        mensaje: `Clasificando página ${i} de ${numPages} con Claude…`
+        pagina: idx,
+        totalPaginas: totalAProcesar,
+        mensaje: `Clasificando página ${i} con Claude… (${idx}/${totalAProcesar})`
       });
 
       try {
@@ -143,9 +156,9 @@
 
       reportar({
         fase: "pagina-lista",
-        pagina: i,
-        totalPaginas: numPages,
-        mensaje: `Listo página ${i} de ${numPages}`
+        pagina: idx,
+        totalPaginas: totalAProcesar,
+        mensaje: `Listo página ${i} (${idx}/${totalAProcesar})`
       });
     }
 
