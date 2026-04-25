@@ -77,7 +77,7 @@
     }
   });
   if (ui.ocrDividir) ui.ocrDividir.addEventListener("click", ejecutarFlujoOcrSabana);
-  if (ui.modalDividir) ui.modalDividir.addEventListener("click", abrirModalSeleccionManual);
+  if (ui.modalDividir) ui.modalDividir.addEventListener("click", analizarSabana);
   if (ui.sabanaConfirmar) ui.sabanaConfirmar.addEventListener("click", confirmarPatronSabana);
   if (ui.sabanaCancelar) ui.sabanaCancelar.addEventListener("click", cancelarEditorSabana);
   ui.seleccionar.addEventListener("click", () => ui.fileInput.click());
@@ -2133,14 +2133,10 @@
     throw new Error("Timeout esperando que cargue el popup del requerimiento.");
   }
 
-  async function abrirModalSeleccionManual() {
+  async function analizarSabana() {
     const file = estado.sabanaPendiente;
     if (!file) {
       mostrarToast("Primero soltá o seleccioná un PDF sábana.");
-      return;
-    }
-    if (!window.MAUModalSeleccion) {
-      mostrarToast("Modal no disponible. Recargá la extensión.");
       return;
     }
     const btn = ui.modalDividir;
@@ -2158,7 +2154,7 @@
           ui.pText.textContent = info.mensaje;
         }
       });
-      // 1) Intentar aplicar un patrón aprendido automáticamente
+
       const firmaTipos = textos.map((t) => t.etiqueta || "desconocido");
       const patrones = (await window.MAUStorage.leerPatronesSabana()) || [];
       const match = patrones.find(
@@ -2169,41 +2165,17 @@
           Array.isArray(p.bloquesModal) &&
           p.bloquesModal.length
       );
+
       if (match) {
-        mostrarToast(`Patrón «${match.nombre}» aplicado automáticamente.`);
+        mostrarToast(`Patrón «${match.nombre}» encontrado. Aplicando…`);
         ui.pText.textContent = `Patrón «${match.nombre}» aplicado automáticamente.`;
         await aplicarBloquesModal(file, match.bloquesModal);
-        return;
+      } else {
+        mostrarToast("No se encontró un patrón para esta sábana. Usá 'Crear / Ajustar mapeo' primero.");
+        ui.pText.textContent = "Sin patrón guardado para esta sábana. Creá uno con 'Crear / Ajustar mapeo'.";
       }
-
-      ui.pText.textContent = "Abrí el modal: armá los bloques y elegí requerimientos.";
-
-      await window.MAUModalSeleccion.abrir({
-        file,
-        requerimientos: estado.requerimientos,
-        textosPorPagina: textos,
-        onConfirm: async (bloques) => {
-          // Guardar patrón aprendido antes de aplicar
-          try {
-            const nombrePatron = `auto-${new Date().toISOString().slice(0, 10)}-${firmaTipos.length}p`;
-            await window.MAUStorage.guardarPatronSabana({
-              nombre: nombrePatron,
-              firmaTipos,
-              bloquesModal: bloques.map((b) => ({
-                nombre: b.nombre,
-                paginas: b.paginas,
-                requerimientos: b.requerimientos
-              }))
-            });
-            mostrarToast(`Patrón «${nombrePatron}» guardado.`);
-          } catch (err) {
-            console.warn("[MAU] No se pudo guardar el patrón:", err);
-          }
-          await aplicarBloquesModal(file, bloques);
-        }
-      });
     } catch (e) {
-      console.error("[MAU] Error modal selección:", e);
+      console.error("[MAU] Error al analizar sábana:", e);
       ui.pText.textContent = `Error: ${e.message || e}`;
     } finally {
       if (btn) btn.disabled = false;
@@ -2270,13 +2242,7 @@
    * Si no hay, o el usuario elige "nuevo", abre el flujo de sábana para crear uno.
    */
   async function abrirGestorMapeo() {
-    const mapeos = await window.MAUStorage.leerMapeos();
-    if (mapeos && mapeos.length > 0) {
-      await mostrarListaMapeos(mapeos);
-    } else {
-      mostrarToast("No hay mapeos guardados. Soltá un PDF para crear el primero.");
-      await iniciarCreacionMapeo();
-    }
+    await iniciarCreacionMapeo();
   }
 
   /**
@@ -2430,41 +2396,29 @@
 
       ui.pText.textContent = "Armá los grupos y asignales un requerimiento.";
 
+      const firmaTipos = textos.map((t) => t.etiqueta || "desconocido");
+      const nombrePatron = `mapeo-${new Date().toISOString().slice(0, 10)}-${firmaTipos.length}p`;
+
       await window.MAUModalSeleccion.abrir({
         file,
         requerimientos: estado.requerimientos,
         textosPorPagina: textos,
-        modoMapeo: true,
         onConfirm: async (bloques) => {
-          // Guardar cada bloque como un mapeo permanente
-          for (const b of bloques) {
-            if (!b.requerimientos || !b.requerimientos.length) continue;
-            // Extraer datos estables del texto de las páginas del bloque
-            const textoPaginas = textos
-              .filter((t) => b.paginas.includes(t.pagina))
-              .map((t) => t.texto || t.etiqueta || "")
-              .join(" ");
-            const textoEstable = filtrarTextoEstable(textoPaginas);
-
-            // Extraer persona del bloque (apellido + nombre)
-            const paginaRef = textos.find((t) => b.paginas.includes(t.pagina)) || {};
-            const persona = [paginaRef.apellido, paginaRef.nombre].filter(Boolean).join(" ").trim();
-
-            for (const req of b.requerimientos) {
-              await window.MAUStorage.guardarMapeo({
-                tipoDoc: b.nombre || paginaRef.etiqueta || "Documento",
-                persona,
-                cuil: paginaRef.cuil || "",
-                patente: paginaRef.patente || "",
-                textoEstable,
-                requerimiento: req
-              });
-            }
+          try {
+            await window.MAUStorage.guardarPatronSabana({
+              nombre: nombrePatron,
+              firmaTipos,
+              bloquesModal: bloques.map((b) => ({
+                nombre: b.nombre,
+                paginas: b.paginas,
+                requerimientos: b.requerimientos
+              }))
+            });
+            mostrarToast(`Mapeo guardado: ${bloques.length} bloque(s). Se aplicará automáticamente la próxima vez.`);
+          } catch (err) {
+            console.warn("[MAU] No se pudo guardar el patrón:", err);
           }
-          mostrarToast(`Mapeo guardado: ${bloques.length} grupo(s).`);
           resetSabanaUi();
-
-          // También aplicar como asignación en la tabla actual (igual que antes)
           await aplicarBloquesModal(file, bloques);
         }
       });
