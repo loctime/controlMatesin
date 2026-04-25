@@ -1,4 +1,22 @@
 (function () {
+  // ===================== MAPEOS ESTRUCTURADOS =====================
+  // Cada mapeo guarda: tipoDoc, persona, cuil, patente, textoEstable, requerimiento.
+  // Se usan para identificar documentos futuros sin depender del nombre del archivo.
+
+  const KEY_MAPEOS_V2 = "matesin_mapeos_v2";
+
+  async function leerMapeos() {
+    return enviarMensajeExtension({ action: "storage:leerMapeosV2" });
+  }
+
+  async function guardarMapeo(mapeo) {
+    return enviarMensajeExtension({ action: "storage:guardarMapeoV2", payload: mapeo });
+  }
+
+  async function eliminarMapeo(indice) {
+    return enviarMensajeExtension({ action: "storage:eliminarMapeoV2", payload: { indice } });
+  }
+
   async function leerMemoria() {
     return enviarMensajeExtension({ action: "storage:getMemory" });
   }
@@ -47,6 +65,9 @@
     leerPatronesSabana,
     guardarPatronSabana,
     limpiarPatronesSabana,
+    leerMapeos,
+    guardarMapeo,
+    eliminarMapeo,
     normalizar
   };
 

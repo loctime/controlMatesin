@@ -74,6 +74,42 @@ async function manejarMensaje(mensaje) {
   const accion = mensaje?.action;
   if (!accion) throw new Error("Mensaje sin acción.");
 
+  if (accion === "storage:leerMapeosV2") {
+    const data = await chrome.storage.local.get("matesin_mapeos_v2");
+    return data["matesin_mapeos_v2"] || [];
+  }
+
+  if (accion === "storage:guardarMapeoV2") {
+    const mapeo = mensaje?.payload || {};
+    if (!mapeo.requerimiento) throw new Error("Falta el requerimiento en el mapeo.");
+    const data = await chrome.storage.local.get("matesin_mapeos_v2");
+    const lista = data["matesin_mapeos_v2"] || [];
+    // Evitar duplicados exactos (mismo tipoDoc + persona + requerimiento)
+    const existe = lista.findIndex(
+      (m) => normalizar(m.tipoDoc || "") === normalizar(mapeo.tipoDoc || "") &&
+             normalizar(m.persona || "") === normalizar(mapeo.persona || "") &&
+             normalizar(m.requerimiento || "") === normalizar(mapeo.requerimiento || "")
+    );
+    if (existe >= 0) {
+      // Actualizar el existente con el texto estable nuevo
+      lista[existe] = { ...lista[existe], ...mapeo, updatedAt: Date.now() };
+    } else {
+      lista.push({ ...mapeo, createdAt: Date.now() });
+    }
+    await chrome.storage.local.set({ "matesin_mapeos_v2": lista });
+    return lista;
+  }
+
+  if (accion === "storage:eliminarMapeoV2") {
+    const indice = mensaje?.payload?.indice;
+    if (typeof indice !== "number") throw new Error("Índice inválido.");
+    const data = await chrome.storage.local.get("matesin_mapeos_v2");
+    const lista = data["matesin_mapeos_v2"] || [];
+    lista.splice(indice, 1);
+    await chrome.storage.local.set({ "matesin_mapeos_v2": lista });
+    return lista;
+  }
+
   if (accion === "storage:getMemory") {
     const data = await chrome.storage.local.get(KEY_MAPEOS);
     return data[KEY_MAPEOS] || {};

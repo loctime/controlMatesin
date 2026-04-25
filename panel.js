@@ -23,6 +23,7 @@
     dropzone: document.getElementById("mau-dropzone"),
     seleccionar: document.getElementById("mau-seleccionar"),
     fileInput: document.getElementById("mau-file-input"),
+    abrirMapeo: document.getElementById("mau-abrir-mapeo"),
     detectar: document.getElementById("mau-detectar"),
     tabla: document.getElementById("mau-tabla-body"),
     procesar: document.getElementById("mau-procesar"),
@@ -49,6 +50,7 @@
   });
   ui.detectar.addEventListener("click", detectarRequerimientosPendientes);
   ui.procesar.addEventListener("click", procesarTodo);
+  if (ui.abrirMapeo) ui.abrirMapeo.addEventListener("click", abrirGestorMapeo);
   if (ui.docUnico) ui.docUnico.addEventListener("click", async () => {
     const file = estado.sabanaPendiente;
     if (!file) return;
@@ -2198,6 +2200,239 @@
     window.addEventListener("dragenter", handler, true);
     window.addEventListener("dragover", handler, true);
     window.addEventListener("drop", handler, true);
+  }
+
+  // ===================== GESTOR DE MAPEO =====================
+
+  /**
+   * Abre el gestor de mapeo. Si hay mapeos guardados los muestra.
+   * Si no hay, o el usuario elige "nuevo", abre el flujo de sábana para crear uno.
+   */
+  async function abrirGestorMapeo() {
+    const mapeos = await window.MAUStorage.leerMapeos();
+    if (mapeos && mapeos.length > 0) {
+      await mostrarListaMapeos(mapeos);
+    } else {
+      mostrarToast("No hay mapeos guardados. Soltá un PDF para crear el primero.");
+      await iniciarCreacionMapeo();
+    }
+  }
+
+  /**
+   * Muestra los mapeos guardados en un modal con opción de eliminar o agregar nuevo.
+   */
+  async function mostrarListaMapeos(mapeos) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "mau-confirm";
+      const box = document.createElement("div");
+      box.className = "mau-confirm-box";
+      box.style.width = "560px";
+      box.style.maxHeight = "80vh";
+      box.style.overflowY = "auto";
+
+      const h = document.createElement("div");
+      h.style.fontWeight = "700";
+      h.style.fontSize = "16px";
+      h.style.marginBottom = "12px";
+      h.textContent = "Mapeos guardados";
+      box.appendChild(h);
+
+      const tabla = document.createElement("table");
+      tabla.style.width = "100%";
+      tabla.style.borderCollapse = "collapse";
+      tabla.style.fontSize = "13px";
+      tabla.style.marginBottom = "14px";
+
+      const thead = document.createElement("thead");
+      thead.innerHTML = `<tr style="border-bottom:1px solid rgba(148,163,184,0.2)">
+        <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-weight:600">Tipo de documento</th>
+        <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-weight:600">Persona</th>
+        <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-weight:600">Requerimiento</th>
+        <th style="padding:6px 8px"></th>
+      </tr>`;
+      tabla.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      const renderFilas = (lista) => {
+        tbody.innerHTML = "";
+        lista.forEach((m, i) => {
+          const tr = document.createElement("tr");
+          tr.style.borderBottom = "1px solid rgba(148,163,184,0.08)";
+          tr.innerHTML = `
+            <td style="padding:8px;color:#e2e8f0">${escapeHtml(m.tipoDoc || m.tipoDocumento || "—")}</td>
+            <td style="padding:8px;color:#e2e8f0">${escapeHtml(m.persona || "—")}</td>
+            <td style="padding:8px;color:#38bdf8;font-size:12px">${escapeHtml(m.requerimiento || "—")}</td>
+            <td style="padding:8px;text-align:right"></td>
+          `;
+          const tdAccion = tr.querySelector("td:last-child");
+          const btnEl = document.createElement("button");
+          btnEl.type = "button";
+          btnEl.className = "mau-row-btn mau-row-btn-danger";
+          btnEl.textContent = "🗑";
+          btnEl.title = "Eliminar este mapeo";
+          btnEl.addEventListener("click", async () => {
+            const nuevos = await window.MAUStorage.eliminarMapeo(i);
+            if (!nuevos.length) {
+              overlay.remove();
+              resolve();
+              mostrarToast("No quedan mapeos. Podés crear uno nuevo.");
+              return;
+            }
+            renderFilas(nuevos);
+          });
+          tdAccion.appendChild(btnEl);
+          tbody.appendChild(tr);
+        });
+      };
+      renderFilas(mapeos);
+      tabla.appendChild(tbody);
+      box.appendChild(tabla);
+
+      const actions = document.createElement("div");
+      actions.style.display = "flex";
+      actions.style.gap = "10px";
+      actions.style.marginTop = "4px";
+
+      const btnNuevo = document.createElement("button");
+      btnNuevo.type = "button";
+      btnNuevo.style.flex = "1";
+      btnNuevo.style.padding = "11px";
+      btnNuevo.style.border = "0";
+      btnNuevo.style.borderRadius = "10px";
+      btnNuevo.style.fontWeight = "600";
+      btnNuevo.style.fontSize = "14px";
+      btnNuevo.style.cursor = "pointer";
+      btnNuevo.style.background = "linear-gradient(135deg, #38bdf8, #818cf8)";
+      btnNuevo.style.color = "#fff";
+      btnNuevo.textContent = "+ Agregar mapeo nuevo";
+      btnNuevo.addEventListener("click", () => {
+        overlay.remove();
+        resolve();
+        iniciarCreacionMapeo();
+      });
+
+      const btnCerrar = document.createElement("button");
+      btnCerrar.type = "button";
+      btnCerrar.style.flex = "1";
+      btnCerrar.style.padding = "11px";
+      btnCerrar.style.border = "0";
+      btnCerrar.style.borderRadius = "10px";
+      btnCerrar.style.fontWeight = "600";
+      btnCerrar.style.fontSize = "14px";
+      btnCerrar.style.cursor = "pointer";
+      btnCerrar.style.background = "rgba(148,163,184,0.12)";
+      btnCerrar.style.color = "#94a3b8";
+      btnCerrar.textContent = "Cerrar";
+      btnCerrar.addEventListener("click", () => { overlay.remove(); resolve(); });
+
+      actions.appendChild(btnNuevo);
+      actions.appendChild(btnCerrar);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) { overlay.remove(); resolve(); } });
+    });
+  }
+
+  /**
+   * Inicia el flujo de creación de un mapeo nuevo:
+   * espera que el usuario suelte un PDF, lo analiza con Claude
+   * y abre el modal de selección para que arme los grupos.
+   * Al confirmar, guarda cada grupo como un mapeo permanente.
+   */
+  async function iniciarCreacionMapeo() {
+    const file = estado.sabanaPendiente;
+    if (!file) {
+      mostrarToast("Soltá un PDF en el panel para empezar a crear un mapeo.");
+      // Mostrar la dropzone parpadeando para guiar al usuario
+      ui.dropzone.classList.add("mau-over");
+      setTimeout(() => ui.dropzone.classList.remove("mau-over"), 2000);
+      return;
+    }
+    if (!window.MAUModalSeleccion) {
+      mostrarToast("Modal no disponible. Recargá la extensión.");
+      return;
+    }
+
+    if (!estado.requerimientos.length) await detectarRequerimientosPendientes();
+
+    ui.pText.textContent = "Analizando páginas con Claude para el mapeo…";
+    try {
+      const textos = await window.MAUOcrEngine.extraerTextoPorPagina(file, (info) => {
+        if (info.pagina != null && info.totalPaginas != null) {
+          const pct = Math.round((info.pagina / info.totalPaginas) * 100);
+          actualizarProgreso(info.pagina, info.totalPaginas, info.mensaje || `Analizando página ${info.pagina}/${info.totalPaginas}`);
+          ui.pInner.style.width = `${pct}%`;
+        }
+      });
+
+      ui.pText.textContent = "Armá los grupos y asignales un requerimiento.";
+
+      await window.MAUModalSeleccion.abrir({
+        file,
+        requerimientos: estado.requerimientos,
+        textosPorPagina: textos,
+        modoMapeo: true,
+        onConfirm: async (bloques) => {
+          // Guardar cada bloque como un mapeo permanente
+          for (const b of bloques) {
+            if (!b.requerimientos || !b.requerimientos.length) continue;
+            // Extraer datos estables del texto de las páginas del bloque
+            const textoPaginas = textos
+              .filter((t) => b.paginas.includes(t.pagina))
+              .map((t) => t.texto || t.etiqueta || "")
+              .join(" ");
+            const textoEstable = filtrarTextoEstable(textoPaginas);
+
+            // Extraer persona del bloque (apellido + nombre)
+            const paginaRef = textos.find((t) => b.paginas.includes(t.pagina)) || {};
+            const persona = [paginaRef.apellido, paginaRef.nombre].filter(Boolean).join(" ").trim();
+
+            for (const req of b.requerimientos) {
+              await window.MAUStorage.guardarMapeo({
+                tipoDoc: b.nombre || paginaRef.etiqueta || "Documento",
+                persona,
+                cuil: paginaRef.cuil || "",
+                patente: paginaRef.patente || "",
+                textoEstable,
+                requerimiento: req
+              });
+            }
+          }
+          mostrarToast(`Mapeo guardado: ${bloques.length} grupo(s).`);
+          resetSabanaUi();
+
+          // También aplicar como asignación en la tabla actual (igual que antes)
+          await aplicarBloquesModal(file, bloques);
+        }
+      });
+    } catch (e) {
+      console.error("[MAU] Error creando mapeo:", e);
+      ui.pText.textContent = `Error: ${e.message || e}`;
+    }
+  }
+
+  /**
+   * Filtra el texto de un documento para quedarse solo con datos estables.
+   * Elimina: fechas, montos, números de transacción, números de VEP,
+   * números de cuenta que cambian, horas.
+   */
+  function filtrarTextoEstable(texto) {
+    return (texto || "")
+      // Eliminar montos ($ seguido de números con puntos/comas)
+      .replace(/\$[\d.,]+/g, "")
+      // Eliminar fechas dd/mm/yyyy y dd/mm/yy
+      .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, "")
+      // Eliminar horas hh:mm:ss y hh:mm
+      .replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, "")
+      // Eliminar números de transacción largos (8+ dígitos solos)
+      .replace(/\b\d{8,}\b/g, "")
+      // Eliminar número de VEP (suele ser 12+ dígitos)
+      .replace(/VEP[:\s]*[\d]+/gi, "VEP")
+      // Normalizar espacios
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   // Exponer funciones internas para que el background (flujo de Telegram)

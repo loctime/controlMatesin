@@ -81,6 +81,39 @@
     position: absolute; bottom: 4px; right: 4px; background: #0f8a4c;
     color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 3px;
   }
+  .mau-thumb-check {
+    position: absolute; top: 30px; left: 4px;
+    width: 17px; height: 17px; cursor: pointer; z-index: 1;
+    opacity: 0; transition: opacity .15s;
+  }
+  .mau-thumb:hover .mau-thumb-check,
+  .mau-thumb.sel .mau-thumb-check { opacity: 1; }
+  .mau-thumb-eye {
+    position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,.55);
+    color: #fff; border: none; border-radius: 3px; width: 22px; height: 22px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; padding: 0; opacity: 0; transition: opacity .15s; z-index: 1;
+  }
+  .mau-thumb:hover .mau-thumb-eye { opacity: 1; }
+  .mau-preview-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2147484000; cursor: zoom-out;
+  }
+  .mau-preview-overlay img {
+    max-width: 88vw; max-height: 88vh; border-radius: 4px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.7); cursor: default;
+  }
+  .mau-preview-close {
+    position: absolute; top: 14px; right: 20px; background: transparent;
+    border: none; color: #fff; font-size: 32px; line-height: 1;
+    cursor: pointer; font-weight: 300;
+  }
+  .mau-preview-label {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.6); color: #fff; font-size: 13px;
+    padding: 4px 14px; border-radius: 20px; white-space: nowrap;
+  }
 
   .mau-right-title { font-weight: 600; font-size: 13px; margin: 0; color: #222; }
   .mau-sel-info { font-size: 12px; color: #555; }
@@ -243,9 +276,35 @@
       div.dataset.pagina = String(i);
       div.innerHTML = `<span class="mau-thumb-num">${i}</span>`;
       div.appendChild(canvas);
+
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.className = "mau-thumb-check";
+      chk.title = "Seleccionar página";
+      chk.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (chk.checked) ctx.seleccion.add(i);
+        else ctx.seleccion.delete(i);
+        ultimoClic = i;
+        refrescarSeleccionVisual();
+        actualizarInfoSeleccion();
+      });
+      div.appendChild(chk);
+
+      const eyeBtn = document.createElement("button");
+      eyeBtn.className = "mau-thumb-eye";
+      eyeBtn.title = "Ver página completa";
+      eyeBtn.innerHTML = "&#128065;";
+      const pageLabel = [etiqueta, meta].filter(Boolean).join(" — ") || "Sin identificar";
+      eyeBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        abrirPreview(canvas.toDataURL(), i, pageLabel);
+      });
+      div.appendChild(eyeBtn);
+
       const tag = document.createElement("div");
       tag.className = "mau-thumb-tag";
-      tag.textContent = [etiqueta, meta].filter(Boolean).join(" — ") || "Sin identificar";
+      tag.textContent = pageLabel;
       div.appendChild(tag);
 
       div.addEventListener("click", (ev) => manejarClicThumb(ev, i));
@@ -273,10 +332,29 @@
     actualizarInfoSeleccion();
   }
 
+  function abrirPreview(dataUrl, numPagina, label) {
+    const overlay = document.createElement("div");
+    overlay.className = "mau-preview-overlay";
+    overlay.innerHTML = `
+      <button class="mau-preview-close" title="Cerrar">&times;</button>
+      <img src="${dataUrl}" alt="Página ${numPagina}" />
+      <div class="mau-preview-label">Página ${numPagina} — ${label}</div>
+    `;
+    overlay.querySelector(".mau-preview-close").addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
+    document.addEventListener("keydown", function onKey(e) {
+      if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); }
+    });
+    document.body.appendChild(overlay);
+  }
+
   function refrescarSeleccionVisual() {
     ctx.root.querySelectorAll(".mau-thumb").forEach((el) => {
       const pag = parseInt(el.dataset.pagina, 10);
-      el.classList.toggle("sel", ctx.seleccion.has(pag));
+      const esSel = ctx.seleccion.has(pag);
+      el.classList.toggle("sel", esSel);
+      const chk = el.querySelector(".mau-thumb-check");
+      if (chk) chk.checked = esSel;
 
       // mostrar etiqueta de bloque asignado
       const bloque = ctx.bloques.find((b) => b.paginas.includes(pag));
