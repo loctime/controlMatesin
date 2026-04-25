@@ -93,13 +93,33 @@
   }
   .mau-thumb:hover .mau-thumb-eye { opacity: 1; }
   .mau-preview-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,.85);
+    position: fixed; inset: 0; background: rgba(0,0,0,.88);
     display: flex; align-items: center; justify-content: center;
-    z-index: 2147484000; cursor: zoom-out;
+    z-index: 2147484000; overflow: hidden;
   }
+  .mau-preview-img-wrap {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    cursor: grab; user-select: none;
+  }
+  .mau-preview-img-wrap.dragging { cursor: grabbing; }
   .mau-preview-overlay img {
-    max-width: 88vw; max-height: 88vh; border-radius: 4px;
-    box-shadow: 0 8px 40px rgba(0,0,0,.7); cursor: default;
+    border-radius: 4px; box-shadow: 0 8px 40px rgba(0,0,0,.7);
+    transform-origin: center center; pointer-events: none;
+    max-width: none; max-height: none;
+  }
+  .mau-preview-toolbar {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(0,0,0,.55); border-radius: 20px; padding: 5px 12px;
+  }
+  .mau-preview-toolbar button {
+    background: transparent; border: none; color: #fff; font-size: 18px;
+    cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  .mau-preview-toolbar button:hover { color: #adf; }
+  .mau-preview-zoom-label {
+    color: #fff; font-size: 12px; min-width: 38px; text-align: center;
   }
   .mau-preview-close {
     position: absolute; top: 14px; right: 20px; background: transparent;
@@ -147,6 +167,10 @@
     background: #f0f0f0; border-radius: 3px;
   }
   .mau-bloque label { font-size: 11px; color: #333; display: block; margin-top: 3px; }
+  .mau-req-search {
+    width: 100%; padding: 4px 6px; border: 1px solid #c0c4c8; border-radius: 3px;
+    font-size: 11px; margin-bottom: 3px; box-sizing: border-box;
+  }
   .mau-req-list {
     max-height: 130px; overflow-y: auto; border: 1px solid #d0d4d8; border-radius: 4px;
     padding: 4px; background: #fff;
@@ -316,16 +340,22 @@
 
   let ultimoClic = null;
   function manejarClicThumb(ev, pagina) {
-    const bloqueDeEstaPagina = ctx.bloques.find((b) => b.paginas.includes(pagina));
+    const bloquesDeEstaPagina = ctx.bloques.filter((b) => b.paginas.includes(pagina));
+    const paginasDeLosBloques = () => {
+      const set = new Set();
+      for (const b of bloquesDeEstaPagina) b.paginas.forEach(p => set.add(p));
+      return set;
+    };
 
     if (ev.shiftKey && ultimoClic != null) {
       const desde = Math.min(ultimoClic, pagina);
       const hasta = Math.max(ultimoClic, pagina);
       for (let i = desde; i <= hasta; i++) ctx.seleccion.add(i);
     } else if (ev.ctrlKey || ev.metaKey) {
-      if (bloqueDeEstaPagina) {
-        const todasSel = bloqueDeEstaPagina.paginas.every((p) => ctx.seleccion.has(p));
-        for (const p of bloqueDeEstaPagina.paginas) {
+      if (bloquesDeEstaPagina.length > 0) {
+        const todas = paginasDeLosBloques();
+        const todasSel = [...todas].every((p) => ctx.seleccion.has(p));
+        for (const p of todas) {
           if (todasSel) ctx.seleccion.delete(p); else ctx.seleccion.add(p);
         }
       } else {
@@ -334,11 +364,16 @@
       }
       ultimoClic = pagina;
     } else {
-      ctx.seleccion.clear();
-      if (bloqueDeEstaPagina) {
-        for (const p of bloqueDeEstaPagina.paginas) ctx.seleccion.add(p);
+      // Click simple = toggle (igual que el checkbox), sin borrar el resto
+      if (bloquesDeEstaPagina.length > 0) {
+        const todas = paginasDeLosBloques();
+        const todasSel = [...todas].every((p) => ctx.seleccion.has(p));
+        for (const p of todas) {
+          if (todasSel) ctx.seleccion.delete(p); else ctx.seleccion.add(p);
+        }
       } else {
-        ctx.seleccion.add(pagina);
+        if (ctx.seleccion.has(pagina)) ctx.seleccion.delete(pagina);
+        else ctx.seleccion.add(pagina);
       }
       ultimoClic = pagina;
     }
@@ -350,15 +385,85 @@
     const overlay = document.createElement("div");
     overlay.className = "mau-preview-overlay";
     overlay.innerHTML = `
+      <div class="mau-preview-img-wrap">
+        <img src="${dataUrl}" alt="Página ${numPagina}" />
+      </div>
+      <div class="mau-preview-toolbar">
+        <button class="mau-zoom-out" title="Alejar">−</button>
+        <span class="mau-preview-zoom-label">100%</span>
+        <button class="mau-zoom-in" title="Acercar">+</button>
+        <button class="mau-zoom-reset" title="Restablecer" style="font-size:13px;">⟳</button>
+      </div>
       <button class="mau-preview-close" title="Cerrar">&times;</button>
-      <img src="${dataUrl}" alt="Página ${numPagina}" />
       <div class="mau-preview-label">Página ${numPagina} — ${label}</div>
     `;
+
+    const wrap = overlay.querySelector(".mau-preview-img-wrap");
+    const img  = overlay.querySelector("img");
+    const lbl  = overlay.querySelector(".mau-preview-zoom-label");
+    let scale = 1, tx = 0, ty = 0;
+
+    function aplicar(animate) {
+      img.style.transition = animate ? "transform .15s" : "none";
+      img.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+      lbl.textContent = Math.round(scale * 100) + "%";
+    }
+
+    function cambiarZoom(delta, cx, cy) {
+      const prev = scale;
+      scale = Math.min(8, Math.max(0.2, scale * (1 + delta)));
+      // Zoom centrado en el punto del cursor
+      const r = scale / prev;
+      tx = cx + (tx - cx) * r;
+      ty = cy + (ty - cy) * r;
+      aplicar(false);
+    }
+
+    // Rueda del mouse
+    overlay.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const rect = overlay.getBoundingClientRect();
+      const cx = e.clientX - rect.left - rect.width / 2;
+      const cy = e.clientY - rect.top  - rect.height / 2;
+      cambiarZoom(e.deltaY < 0 ? 0.15 : -0.15, cx, cy);
+    }, { passive: false });
+
+    // Botones toolbar
+    const centro = () => ({ cx: 0, cy: 0 });
+    overlay.querySelector(".mau-zoom-in").addEventListener("click",    (e) => { e.stopPropagation(); cambiarZoom(0.25, 0, 0); });
+    overlay.querySelector(".mau-zoom-out").addEventListener("click",   (e) => { e.stopPropagation(); cambiarZoom(-0.25, 0, 0); });
+    overlay.querySelector(".mau-zoom-reset").addEventListener("click", (e) => { e.stopPropagation(); scale=1; tx=0; ty=0; aplicar(true); });
+
+    // Drag para mover cuando hay zoom
+    let drag = null;
+    wrap.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX - tx, y: e.clientY - ty };
+      wrap.classList.add("dragging");
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!drag) return;
+      tx = e.clientX - drag.x;
+      ty = e.clientY - drag.y;
+      aplicar(false);
+    });
+    window.addEventListener("mouseup", () => { drag = null; wrap.classList.remove("dragging"); });
+
+    // Cerrar
     overlay.querySelector(".mau-preview-close").addEventListener("click", () => overlay.remove());
     overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
     document.addEventListener("keydown", function onKey(e) {
       if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); }
     });
+
+    // Tamaño inicial: ajustar al 88% del viewport
+    img.onload = () => {
+      const fitScale = Math.min((window.innerWidth * 0.88) / img.naturalWidth,
+                                (window.innerHeight * 0.88) / img.naturalHeight, 1);
+      scale = fitScale; tx = 0; ty = 0;
+      aplicar(false);
+    };
+
     document.body.appendChild(overlay);
   }
 
@@ -370,16 +475,15 @@
       const chk = el.querySelector(".mau-thumb-check");
       if (chk) chk.checked = esSel;
 
-      // mostrar etiqueta de bloque asignado en el tag principal
-      const bloqueIdx = ctx.bloques.findIndex((b) => b.paginas.includes(pag));
-      const bloque = bloqueIdx !== -1 ? ctx.bloques[bloqueIdx] : null;
-      el.classList.toggle("asignada", !!bloque);
+      // mostrar etiquetas de todos los bloques a los que pertenece esta página
+      const bloquesDeEsta = ctx.bloques
+        .map((b, idx) => ({ b, idx }))
+        .filter(({ b }) => b.paginas.includes(pag));
+      el.classList.toggle("asignada", bloquesDeEsta.length > 0);
       const tagEl = el.querySelector(".mau-thumb-tag");
       if (tagEl) {
-        if (bloque) {
-          const num = bloqueIdx + 1;
-          const nombre = bloque.nombre && bloque.nombre !== `Bloque ${num}` ? ` — ${bloque.nombre}` : "";
-          tagEl.textContent = `Bloque ${num}${nombre}`;
+        if (bloquesDeEsta.length > 0) {
+          tagEl.textContent = bloquesDeEsta.map(({ b, idx }) => `Bloque ${idx + 1}`).join(" · ");
           tagEl.style.color = "#0f8a4c";
           tagEl.style.fontWeight = "600";
         } else {
@@ -426,14 +530,6 @@
   function crearBloqueConSeleccion() {
     if (!ctx.seleccion.size) return;
     const paginas = [...ctx.seleccion].sort((a, b) => a - b);
-
-    // Sacar estas páginas de cualquier bloque previo
-    for (const b of ctx.bloques) {
-      b.paginas = b.paginas.filter((p) => !paginas.includes(p));
-    }
-    for (let i = ctx.bloques.length - 1; i >= 0; i--) {
-      if (ctx.bloques[i].paginas.length === 0) ctx.bloques.splice(i, 1);
-    }
 
     // Calcular meta consolidado desde textosPorPagina
     const meta = consolidarMeta(paginas);
@@ -513,6 +609,7 @@
         <div class="mau-paginas">Páginas: ${b.paginas.join(", ")}</div>
         ${metaStr ? `<div class="mau-meta">${escapeHtml(metaStr)}</div>` : ""}
         <label>Subir a estos requerimientos:</label>
+        <input type="text" class="mau-req-search" data-buscar="${b.id}" placeholder="Buscar requerimiento…" />
         <div class="mau-req-list" data-reqs="${b.id}">${reqsHtml}</div>
       `;
       cont.appendChild(div);
@@ -536,6 +633,17 @@
         }
       });
     });
+    cont.querySelectorAll("input[data-buscar]").forEach((inp) => {
+      const lista = cont.querySelector(`div[data-reqs="${inp.dataset.buscar}"]`);
+      if (!lista) return;
+      inp.addEventListener("input", () => {
+        const q = inp.value.trim().toLowerCase();
+        lista.querySelectorAll("label").forEach((lbl) => {
+          lbl.style.display = !q || lbl.textContent.toLowerCase().includes(q) ? "" : "none";
+        });
+      });
+    });
+
     cont.querySelectorAll("div[data-reqs]").forEach((div) => {
       const id = parseInt(div.dataset.reqs, 10);
       const b = ctx.bloques.find((x) => x.id === id);

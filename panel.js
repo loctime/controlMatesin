@@ -177,6 +177,96 @@
     return { textoCompleto, apellido, nombre, cuil, contrato };
   }
 
+  // Lee los nombres del widget "Sobres activos" en la página del sistema.
+  // Intenta múltiples estrategias porque el widget puede ser un <select>, una lista custom, etc.
+  function leerNombresDesdeSobresActivos() {
+    // Estrategia 1: buscar un <select> cuya etiqueta cercana diga "Sobres activos"
+    for (const sel of document.querySelectorAll("select")) {
+      const candidatos = [];
+      // Buscar label asociado por for= o por texto cercano en el ancestro
+      const id = sel.id;
+      if (id) {
+        const label = document.querySelector(`label[for="${id}"]`);
+        if (label && /sobres\s*activos/i.test(label.textContent)) {
+          candidatos.push(sel);
+        }
+      }
+      // También revisar si el contenedor padre menciona "sobres activos"
+      let parent = sel.parentElement;
+      for (let i = 0; i < 4 && parent; i++, parent = parent.parentElement) {
+        const txt = Array.from(parent.childNodes)
+          .filter(n => n.nodeType === 3).map(n => n.textContent).join(" ");
+        if (/sobres\s*activos/i.test(txt) || /sobres\s*activos/i.test(parent.textContent?.slice(0, 60) || "")) {
+          candidatos.push(sel);
+          break;
+        }
+      }
+      if (candidatos.includes(sel) && sel.options.length > 0) {
+        const nombres = Array.from(sel.options).map(o => textoPlano(o.textContent)).filter(Boolean);
+        console.log(`[MAU] Sobres activos leídos desde <select>: ${nombres.length}`);
+        return nombres;
+      }
+    }
+
+    // Estrategia 2: buscar cualquier elemento de lista (ul/li o div/span) cerca de texto "Sobres activos"
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!/sobres\s*activos/i.test(node.textContent)) continue;
+      // Encontrado el nodo de texto — subir hasta encontrar un contenedor con lista
+      let container = node.parentElement;
+      for (let i = 0; i < 6 && container; i++, container = container.parentElement) {
+        const items = container.querySelectorAll("li, option");
+        if (items.length >= 3) {
+          const nombres = Array.from(items).map(el => textoPlano(el.textContent)).filter(Boolean);
+          console.log(`[MAU] Sobres activos leídos desde lista cercana: ${nombres.length}`);
+          return nombres;
+        }
+      }
+    }
+
+    console.log("[MAU] No se encontró el widget 'Sobres activos' en la página.");
+    return [];
+  }
+
+  // Extrae todos los requerimientos de las filas de la tabla, sin filtrar por estado.
+  // Devuelve Map<"nombre||apellido" → {nombre, link, recurso, ts}>
+  function escanearFilasTabla(idxRecurso) {
+    const candidatos = Array.from(document.querySelectorAll("tr")).filter((tr) => {
+      const directTds = tr.querySelectorAll(":scope > td");
+      return directTds.length >= 4 && !tr.querySelector("table");
+    });
+    const mapa = new Map();
+    for (const tr of candidatos) {
+      const link = tr.querySelector("a");
+      if (!link) continue;
+      const nombre = textoPlano(link.textContent);
+      if (!nombre) continue;
+      const celdas = tr.querySelectorAll(":scope > td");
+      let recursoData = { textoCompleto: "", apellido: "", nombre: "", cuil: "", contrato: "" };
+      if (idxRecurso >= 0 && celdas[idxRecurso]) {
+        recursoData = parsearRecurso(celdas[idxRecurso]);
+      } else {
+        for (const td of celdas) {
+          if (td.contains(link)) continue;
+          const tdText = textoPlano(td.textContent);
+          if (/[A-Z]{2,}\s+[A-Z]{2,}/i.test(tdText) && !/matesin/i.test(tdText)) {
+            recursoData = parsearRecurso(td);
+            break;
+          }
+        }
+      }
+      const fechaTxt = (tr.textContent.match(/(\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2})?)/) || [])[1] || "";
+      const clave = `${nombre}||${recursoData.apellido}||${recursoData.nombre}`.toLowerCase();
+      const actual = mapa.get(clave);
+      const ts = parsearFechaSitio(fechaTxt);
+      if (!actual || ts > (actual.ts || 0)) {
+        mapa.set(clave, { nombre, link, recurso: recursoData, ts });
+      }
+    }
+    return mapa;
+  }
+
   async function detectarRequerimientosPendientes() {
     const botonBuscar = Array.from(document.querySelectorAll("button, input[type=button], a"))
       .find((el) => /buscar/i.test(el.textContent || el.value || ""));
@@ -184,76 +274,42 @@
 
     await dormir(900);
 
-    // Detectar qué columna es "Recurso" leyendo los headers del DOM.
     const idxRecurso = detectarIndiceColumnaRecurso();
     console.log(`[MAU] Índice columna Recurso: ${idxRecurso}`);
 
-    // Filtrar solo filas de datos reales: con 4+ celdas directas y sin tablas anidadas.
-    // Esto excluye las filas "wrapper" del sitio que tienen una sola <td> con tablas internas.
-    const candidatos = Array.from(document.querySelectorAll("tr")).filter((tr) => {
-      const directTds = tr.querySelectorAll(":scope > td");
-      return directTds.length >= 4 && !tr.querySelector("table");
-    });
-    console.log(`[MAU] Filas candidatas (leaf rows con 4+ tds): ${candidatos.length}`);
-    const reqsCrudos = [];
-    for (const tr of candidatos) {
-      const txt = textoPlano(tr.textContent);
-      if (!/pend envio|pend envío/i.test(txt)) continue;
-      const link = tr.querySelector("a");
-      if (!link) continue;
-      const nombre = textoPlano(link.textContent);
-      if (!nombre) continue;
-      // Verificar si ya está completo: "(1 / 1)" o "(2 / 2)" → saltar.
-      // Solo procesar los que tienen "(0 / X)" (pendientes de archivo).
-      const celdaReq = link.closest("td");
-      const textoReq = celdaReq ? textoPlano(celdaReq.textContent) : txt;
-      const countMatch = textoReq.match(/\((\d+)\s*\/\s*(\d+)\)/);
-      if (countMatch) {
-        const enviados = parseInt(countMatch[1], 10);
-        const totales = parseInt(countMatch[2], 10);
-        if (enviados >= totales && totales > 0) {
-          console.log(`[MAU] Requerimiento "${nombre}" ya completo (${enviados}/${totales}), salteando.`);
-          continue;
+    const mapaTabla = escanearFilasTabla(idxRecurso);
+    console.log(`[MAU] Filas en tabla (sin filtro estado): ${mapaTabla.size}`);
+
+    const nombresSobre = leerNombresDesdeSobresActivos();
+    let reqs;
+
+    if (nombresSobre.length > 0) {
+      // Fuente principal: lista de sobres activos de la página.
+      // Para cada nombre, buscar entradas en la tabla (puede haber varias por recurso distinto).
+      reqs = [];
+      const vacios = { textoCompleto: "", apellido: "", nombre: "", cuil: "", contrato: "" };
+      for (const nombre of nombresSobre) {
+        const matches = Array.from(mapaTabla.values()).filter(e => e.nombre === nombre);
+        if (matches.length > 0) {
+          reqs.push(...matches.map(m => ({ nombre: m.nombre, link: m.link, recurso: m.recurso })));
+        } else {
+          // El sobre existe en el widget pero no hay fila en la tabla visible ahora.
+          // Se agrega igual para que aparezca en el modal; el link se buscará en vivo al subir.
+          reqs.push({ nombre, link: null, recurso: vacios });
         }
       }
-      // Extraer Recurso de la celda correspondiente (búsqueda dinámica, nunca lista fija).
-      // Usar :scope > td para solo obtener celdas directas, no anidadas.
-      const celdas = tr.querySelectorAll(":scope > td");
-      let recursoData = { textoCompleto: "", apellido: "", nombre: "", cuil: "", contrato: "" };
-      if (idxRecurso >= 0 && celdas[idxRecurso]) {
-        recursoData = parsearRecurso(celdas[idxRecurso]);
-      } else {
-        // Fallback: buscar la celda que contiene texto de persona (antes del link del requerimiento).
-        for (const td of celdas) {
-          if (td.contains(link)) continue; // saltear la celda del requerimiento
-          const tdText = textoPlano(td.textContent);
-          // Buscar celdas que tengan formato de nombre de persona o un <a> con nombre
-          if (/[A-Z]{2,}\s+[A-Z]{2,}/i.test(tdText) && !/matesin/i.test(tdText)) {
-            recursoData = parsearRecurso(td);
-            break;
-          }
-        }
-      }
-      // Extraer fecha "Modificado" de la fila para poder elegir la más reciente en caso de duplicados.
-      const fechaTxt = (tr.textContent.match(/(\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2})?)/) || [])[1] || "";
-      reqsCrudos.push({ nombre, link, recurso: recursoData, fechaTxt, ts: parsearFechaSitio(fechaTxt) });
+      console.log(`[MAU] Requerimientos desde sobres activos: ${reqs.length}`);
+    } else {
+      // Fallback: solo los que tienen "pend envío" (comportamiento anterior).
+      reqs = Array.from(mapaTabla.values())
+        .filter(e => {
+          const tr = e.link?.closest("tr");
+          return tr && /pend envio|pend envío/i.test(textoPlano(tr.textContent));
+        })
+        .map(e => ({ nombre: e.nombre, link: e.link, recurso: e.recurso }));
+      console.log(`[MAU] Requerimientos (fallback pend envío): ${reqs.length}`);
     }
-    // Deduplicar por nombre + recurso (apellido) — NO solo por nombre.
-    // Dos requerimientos con mismo nombre pero distinto Recurso son ítems diferentes.
-    const porClave = new Map();
-    for (const r of reqsCrudos) {
-      const clave = `${r.nombre}||${r.recurso.apellido}||${r.recurso.nombre}`.toLowerCase();
-      const actual = porClave.get(clave);
-      if (!actual || (r.ts || 0) > (actual.ts || 0)) {
-        porClave.set(clave, r);
-      }
-    }
-    const reqs = Array.from(porClave.values()).map((r) => ({
-      nombre: r.nombre,
-      link: r.link,
-      recurso: r.recurso
-    }));
-    console.log(`[MAU] Requerimientos detectados: ${reqs.length} (de ${reqsCrudos.length} crudos, deduplicados por nombre+recurso).`);
+
     estado.requerimientos = reqs;
     estado.filas = reqs.map((r) => ({
       id: estado.nextFilaId++,
@@ -1468,32 +1524,37 @@
    */
   function buscarLinkRequerimientoVivo(nombreReq, recursoEsperado) {
     const idxRecurso = detectarIndiceColumnaRecurso();
-    // Filtrar solo filas de datos reales (leaf rows sin tablas anidadas).
     const filas = Array.from(document.querySelectorAll("tr")).filter((tr) => {
       const directTds = tr.querySelectorAll(":scope > td");
       return directTds.length >= 4 && !tr.querySelector("table");
     });
-    let fallback = null;
-    for (const tr of filas) {
-      const txt = textoPlano(tr.textContent || "");
-      if (!/pend envio|pend envío/i.test(txt)) continue;
-      const link = tr.querySelector("a");
-      if (!link) continue;
-      const nombreLink = textoPlano(link.textContent || "");
-      if (nombreLink !== nombreReq) continue;
-      // Si no tenemos info de recurso, devolver el primero que coincida.
-      if (!recursoEsperado || !recursoEsperado.apellido) return link;
-      // Intentar matchear por Recurso de la fila.
-      const celdas = tr.querySelectorAll(":scope > td");
-      if (idxRecurso >= 0 && celdas[idxRecurso]) {
-        const recursoFila = parsearRecurso(celdas[idxRecurso]);
-        const apeEsperado = (recursoEsperado.apellido || "").toLowerCase();
-        const apeFila = (recursoFila.apellido || "").toLowerCase();
-        if (apeEsperado && apeFila && apeFila.includes(apeEsperado)) return link;
+
+    // Buscar en dos pasadas: primero filas con "pend envío", luego cualquier fila.
+    // Esto permite subir a requerimientos que no están en estado pendiente pero sí en la tabla.
+    const pasadas = [
+      filas.filter(tr => /pend envio|pend envío/i.test(textoPlano(tr.textContent || ""))),
+      filas
+    ];
+    for (const conjunto of pasadas) {
+      let fallback = null;
+      for (const tr of conjunto) {
+        const link = tr.querySelector("a");
+        if (!link) continue;
+        const nombreLink = textoPlano(link.textContent || "");
+        if (nombreLink !== nombreReq) continue;
+        if (!recursoEsperado || !recursoEsperado.apellido) return link;
+        const celdas = tr.querySelectorAll(":scope > td");
+        if (idxRecurso >= 0 && celdas[idxRecurso]) {
+          const recursoFila = parsearRecurso(celdas[idxRecurso]);
+          const apeEsperado = (recursoEsperado.apellido || "").toLowerCase();
+          const apeFila = (recursoFila.apellido || "").toLowerCase();
+          if (apeEsperado && apeFila && apeFila.includes(apeEsperado)) return link;
+        }
+        if (!fallback) fallback = link;
       }
-      if (!fallback) fallback = link;
+      if (fallback) return fallback;
     }
-    return fallback;
+    return null;
   }
 
   async function cerrarFancyboxAbierto() {
