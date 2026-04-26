@@ -178,8 +178,47 @@
     return n;
   }
 
+  /**
+   * Convierte todas las páginas de un PDF a imágenes base64 SIN llamar a Claude.
+   * Usado para capturar imágenes de referencia al aprender, y las páginas nuevas al trabajar.
+   *
+   * @param {File} file
+   * @param {(info: {pagina:number, totalPaginas:number}) => void} [onProgress]
+   * @param {{ escala?: number, calidad?: number }} [opciones]
+   *   - escala: resolución (default 120 → buen balance tamaño/nitidez para comparación)
+   *   - calidad: calidad JPEG 0-1 (default 0.55)
+   * @returns {Promise<Array<{pagina:number, base64:string}>>}
+   */
+  async function renderizarPaginas(file, onProgress, opciones) {
+    await asegurarPdfJs();
+    const data = new Uint8Array(await file.arrayBuffer());
+    const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+    const numPages = pdf.numPages;
+    const escala = ((opciones?.escala) || 120) / 72;
+    const calidad = (opciones?.calidad) ?? 0.55;
+    const salida = [];
+
+    for (let i = 1; i <= numPages; i++) {
+      if (typeof onProgress === "function") onProgress({ pagina: i, totalPaginas: numPages });
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: escala });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      salida.push({ pagina: i, base64: canvasABase64Jpeg(canvas, calidad) });
+    }
+
+    try { pdf.destroy(); } catch { /* noop */ }
+    return salida;
+  }
+
   window.MAUOcrEngine = {
     extraerTextoPorPagina,
+    renderizarPaginas,
     contarPaginasPdf,
     asegurarPdfJs
   };

@@ -7,7 +7,7 @@
   await inyectarCss();
   await inyectarPanelHtml();
   iniciarBridgeMensajes();
-  await cargarScripts(["storage.js", "matcher.js", "pdf-splitter.js", "ocr-engine.js", "modal-seleccion.js", "panel.js"]);
+  await cargarScripts(["storage.js", "imagedb.js", "matcher.js", "pdf-splitter.js", "ocr-engine.js", "modal-seleccion.js", "panel.js"]);
 
   function inyectarCss() {
     return new Promise((resolve) => {

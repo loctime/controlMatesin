@@ -377,89 +377,152 @@
           }
         });
 
-        // Para cada página clasificada, encontrar el bloque del mapeo que corresponde
+        // ── MATCHING: Comparación por imagen (regla principal) ──
         const normStr = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 
-        // Debug: mostrar estado de los bloques del mapeo
-        console.log(`[MAU][TRABAJAR] Bloques en mapeo: ${todosLosBloques.length}`);
-        todosLosBloques.forEach((b, i) => {
-          const tipos = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "?");
-          console.log(`[MAU][TRABAJAR]   B[${i}] "${b.nombre}" pags=[${(b.paginas||[]).join(',')}] tipos=[${tipos.join(',')}] meta=${JSON.stringify(b.meta||null)} reqs=${(b.requerimientos||[]).join('|')}`);
-        });
+        let bloquesFinales = null;
 
-        // Agrupar páginas por bloque del mapeo
-        const asignaciones = new Map(); // bloqueIdx → [páginas]
-        const bloqueDeKeys = new Map(); // bloqueIdx → bloque obj
-
-        textos.forEach((t) => {
-          if (!t.etiqueta && t.id === "desconocido") return;
-          const cuilPag = normStr(t.cuil || "").replace(/[^0-9]/g, "");
-          const apellidoPag = normStr(t.apellido || "");
-          console.log(`[MAU][TRABAJAR] Pág.${t.pagina}: id="${t.id}" etiq="${t.etiqueta}" cuil="${t.cuil}" apellido="${t.apellido}"`);
-
-          // Buscar el mejor bloque del mapeo que coincida con tipo + empleado
-          let mejorBloque = null;
-          let mejorScore = -1;
-
-          todosLosBloques.forEach((b, bi) => {
-            const tiposBloque = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "desconocido");
-            const tiposConocidos = tiposBloque.filter(tp => tp !== "desconocido");
-            const coincideTipo = tiposBloque.includes(t.etiqueta) || tiposBloque.includes(t.id);
-
-            // Si el bloque tiene tipos clasificados y ninguno coincide → saltar
-            if (tiposConocidos.length > 0 && !coincideTipo) return;
-            // Si el bloque NO tiene tipos clasificados (patrón viejo) → solo permitir si CUIL exacto
-            if (tiposConocidos.length === 0) {
-              const cuilBloqFallback = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
-              if (!cuilBloqFallback || !cuilPag || cuilPag !== cuilBloqFallback) return;
+        // 1) Método principal: comparar imágenes nuevas contra imágenes de referencia del mapeo
+        if (window.MAUImageDB && window.MAUOcrEngine?.renderizarPaginas && window.MAUStorage?.compararConReferencia) {
+          try {
+            ui.pText.textContent = `Cargando imágenes de referencia…`;
+            const nombresPatrones = patrones.map((p) => p.nombre).filter(Boolean);
+            let referenciaEncontrada = null;
+            for (const nombre of nombresPatrones) {
+              const ref = await window.MAUImageDB.leerImagenesPatron(nombre);
+              if (ref?.imagenes?.length && ref?.bloques?.length) {
+                referenciaEncontrada = ref;
+                console.log(`[MAU][TRABAJAR] Referencia de imágenes encontrada: "${nombre}" (${ref.imagenes.length} imgs, ${ref.bloques.length} bloques)`);
+                break;
+              }
             }
 
-            let score = coincideTipo ? 1 : 0; // coincide en tipo (o fallback sin tipo)
-            const cuilBloque = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
-            const apellidoBloque = normStr(b.meta?.apellido || "");
+            if (referenciaEncontrada) {
+              ui.pText.textContent = `Renderizando páginas de «${archivo.name}»…`;
+              const nuevasPaginas = await window.MAUOcrEngine.renderizarPaginas(
+                archivo,
+                (info) => actualizarProgreso(info.pagina, info.totalPaginas, `Preparando página ${info.pagina}/${info.totalPaginas}…`),
+                { escala: 120, calidad: 0.60 }
+              );
 
-            if (cuilBloque && cuilPag && cuilPag === cuilBloque) score += 10;
-            else if (apellidoBloque && apellidoPag && apellidoPag.includes(apellidoBloque)) score += 5;
-            else if (apellidoBloque && normStr([t.textoEstable, t.nombre].join(" ")).includes(apellidoBloque)) score += 2;
+              ui.pText.textContent = `Comparando con mapeo via Claude…`;
+              console.log(`[MAU][TRABAJAR] Comparando ${nuevasPaginas.length} páginas nuevas contra ${referenciaEncontrada.bloques.length} bloques de referencia…`);
+              const resultado = await window.MAUStorage.compararConReferencia(nuevasPaginas, referenciaEncontrada);
+              if (resultado && resultado.length) {
+                console.log(`[MAU][TRABAJAR] ✅ Comparación por imagen exitosa: ${resultado.length} bloque(s) asignados`);
+                bloquesFinales = resultado;
+              } else {
+                console.log("[MAU][TRABAJAR] Comparación por imagen no retornó resultados, pasando a fallback.");
+              }
+            } else {
+              console.log("[MAU][TRABAJAR] No hay imágenes de referencia guardadas, usando fallback.");
+            }
+          } catch (e) {
+            console.warn("[MAU][TRABAJAR] Comparación por imagen falló, usando fallback:", e);
+          }
+        }
 
-            if (score > mejorScore) { mejorScore = score; mejorBloque = bi; bloqueDeKeys.set(bi, b); }
+        // 2) Fallback: matching Claude por texto (clasificación ya hecha en textos)
+        if (!bloquesFinales) {
+          try {
+            ui.pText.textContent = `Macheando «${archivo.name}» con mapeo via Claude…`;
+            console.log(`[MAU][TRABAJAR] Fallback: pidiendo match por texto a Claude con ${textos.length} páginas…`);
+            const matchClaude = await window.MAUStorage.matchearConMapeo(textos);
+            if (matchClaude && Array.isArray(matchClaude.bloques) && matchClaude.bloques.length) {
+              console.log(`[MAU][TRABAJAR] Claude matcheó patrón "${matchClaude.patronMatch}" (confianza ${matchClaude.confianza}%)`);
+              bloquesFinales = matchClaude.bloques;
+            } else {
+              console.log("[MAU][TRABAJAR] Fallback Claude texto no encontró match, usando código.");
+            }
+          } catch (e) {
+            console.warn("[MAU][TRABAJAR] Fallback Claude texto falló, usando código:", e);
+          }
+        }
+
+        // 2) Fallback: matching mecánico por score tipo+CUIL
+        if (!bloquesFinales) {
+          console.log(`[MAU][TRABAJAR] Fallback código — Bloques en mapeo: ${todosLosBloques.length}`);
+          todosLosBloques.forEach((b, i) => {
+            const tipos = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "?");
+            console.log(`[MAU][TRABAJAR]   B[${i}] "${b.nombre}" tipos=[${tipos.join(',')}] reqs=${(b.requerimientos||[]).join('|')}`);
           });
 
-          if (mejorBloque !== null) {
-            console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} matcheó bloque "${bloqueDeKeys.get(mejorBloque)?.nombre}" (score=${mejorScore})`);
-            if (!asignaciones.has(mejorBloque)) asignaciones.set(mejorBloque, []);
-            asignaciones.get(mejorBloque).push(t.pagina);
-          } else {
-            console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} SIN match en ningún bloque`);
-          }
-        });
+          const asignaciones = new Map();
+          const bloqueDeKeys = new Map();
 
-        // Crear un archivo PDF por cada bloque identificado y asignar a sus requerimientos
-        if (!asignaciones.size) {
+          textos.forEach((t) => {
+            if (!t.etiqueta && t.id === "desconocido") return;
+            const cuilPag = normStr(t.cuil || "").replace(/[^0-9]/g, "");
+            const apellidoPag = normStr(t.apellido || "");
+            console.log(`[MAU][TRABAJAR] Pág.${t.pagina}: id="${t.id}" etiq="${t.etiqueta}" cuil="${t.cuil}" apellido="${t.apellido}"`);
+
+            let mejorBloque = null;
+            let mejorScore = -1;
+
+            todosLosBloques.forEach((b, bi) => {
+              const tiposBloque = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "desconocido");
+              const tiposConocidos = tiposBloque.filter(tp => tp !== "desconocido");
+              const coincideTipo = tiposBloque.includes(t.etiqueta) || tiposBloque.includes(t.id);
+              if (tiposConocidos.length > 0 && !coincideTipo) return;
+              if (tiposConocidos.length === 0) {
+                const cuilBloqFallback = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
+                if (!cuilBloqFallback || !cuilPag || cuilPag !== cuilBloqFallback) return;
+              }
+              let score = coincideTipo ? 1 : 0;
+              const cuilBloque = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
+              const apellidoBloque = normStr(b.meta?.apellido || "");
+              if (cuilBloque && cuilPag && cuilPag === cuilBloque) score += 10;
+              else if (apellidoBloque && apellidoPag && apellidoPag.includes(apellidoBloque)) score += 5;
+              else if (apellidoBloque && normStr([t.textoEstable, t.nombre].join(" ")).includes(apellidoBloque)) score += 2;
+              if (score > mejorScore) { mejorScore = score; mejorBloque = bi; bloqueDeKeys.set(bi, b); }
+            });
+
+            if (mejorBloque !== null) {
+              console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} matcheó "${bloqueDeKeys.get(mejorBloque)?.nombre}" (score=${mejorScore})`);
+              if (!asignaciones.has(mejorBloque)) asignaciones.set(mejorBloque, []);
+              asignaciones.get(mejorBloque).push(t.pagina);
+            } else {
+              console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} SIN match`);
+            }
+          });
+
+          if (asignaciones.size) {
+            bloquesFinales = [];
+            for (const [bi, paginas] of asignaciones) {
+              const b = bloqueDeKeys.get(bi);
+              bloquesFinales.push({ nombre: b.nombre, paginas, requerimientos: b.requerimientos || [], meta: b.meta || null });
+            }
+          }
+        }
+
+        if (!bloquesFinales || !bloquesFinales.length) {
           mostrarToast(`No se pudo identificar «${archivo.name}» con el mapeo guardado.`);
           continue;
         }
 
+        // ── Cortar el PDF y asignar cada bloque a sus requerimientos ──
         await window.MAUPdfSplitter.cargarLibreria(
           "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js", "PDFLib"
         );
         const bytes = await archivo.arrayBuffer();
         const src = await window.PDFLib.PDFDocument.load(bytes);
 
-        for (const [bi, paginas] of asignaciones) {
-          const bloque = bloqueDeKeys.get(bi);
+        for (const bloque of bloquesFinales) {
+          const { paginas, requerimientos, meta } = bloque;
+          if (!paginas?.length || !requerimientos?.length) continue;
           const nuevo = await window.PDFLib.PDFDocument.create();
           const indices = paginas.map((n) => n - 1).filter((i) => i >= 0 && i < src.getPageCount());
+          if (!indices.length) continue;
           const pages = await nuevo.copyPages(src, indices);
           pages.forEach((p) => nuevo.addPage(p));
           const out = await nuevo.save();
           const nombreArchivo = `${archivo.name.replace(/\.pdf$/i, "")}-Bloque.pdf`;
           const archivoBloque = new File([out], nombreArchivo, { type: "application/pdf" });
 
-          for (const req of bloque.requerimientos) {
+          for (const req of requerimientos) {
             const copia = new File([await archivoBloque.arrayBuffer()], nombreArchivo, { type: "application/pdf" });
-            asignarArchivoARequerimiento(req, copia, bloque.meta || null);
-            console.log(`[MAU] [TRABAJAR] Asignado a «${req}» — páginas: ${paginas.join(",")}`);
+            asignarArchivoARequerimiento(req, copia, meta || null);
+            console.log(`[MAU][TRABAJAR] Asignado a «${req}» — páginas: ${paginas.join(",")}`);
           }
         }
 
@@ -1063,19 +1126,25 @@
         if (!f.recurso) continue;
         const recApellido = (f.recurso.apellido || "").toLowerCase();
         const recCuil = (f.recurso.cuil || "").replace(/\D/g, "");
-        // Match por CUIL (máxima prioridad)
-        if (metaCuil && recCuil && metaCuil === recCuil) { filaDestino = f; console.log(`[MAU][ASIGNAR] Match CUIL → id=${f.id}`); break; }
-        // Match por apellido
-        if (metaApellido && recApellido && (recApellido.includes(metaApellido) || metaApellido.includes(recApellido))) {
+        // 1) Match por CUIL exacto → máxima prioridad, cortar búsqueda
+        if (metaCuil && recCuil && metaCuil === recCuil) {
           filaDestino = f;
-          console.log(`[MAU][ASIGNAR] Match apellido → id=${f.id} (sigue buscando CUIL)`);
-          // No break — seguir buscando por CUIL que es más preciso
+          console.log(`[MAU][ASIGNAR] Match CUIL exacto → id=${f.id}`);
+          break;
+        }
+        // 2) Match por apellido → preferir fila vacía sobre fila con archivo
+        if (metaApellido && recApellido && (recApellido.includes(metaApellido) || metaApellido.includes(recApellido))) {
+          const esMejorQueActual = !filaDestino || (f.archivo == null && filaDestino.archivo != null);
+          if (esMejorQueActual) {
+            filaDestino = f;
+            console.log(`[MAU][ASIGNAR] Match apellido → id=${f.id} vacía=${!f.archivo} (sigue buscando CUIL)`);
+          }
         }
       }
-      // Si no matcheó por recurso, asignar a la primera SIN archivo.
+      // 3) Sin match por recurso → primera fila vacía, o cualquiera como último recurso
       if (!filaDestino) {
         filaDestino = filasCoincidentes.find((f) => !f.archivo) || filasCoincidentes[0];
-        console.log(`[MAU][ASIGNAR] Sin match recurso, fallback → id=${filaDestino.id}`);
+        console.log(`[MAU][ASIGNAR] Sin match recurso, fallback vacía → id=${filaDestino.id}`);
       }
     } else {
       // Sin metadata → asignar a la primera fila SIN archivo ya asignado.
@@ -2646,6 +2715,31 @@
         } catch (err) {
           console.warn("[MAU] No se pudo guardar el patrón:", err);
         }
+
+        // Guardar imágenes de referencia en IndexedDB para comparación futura
+        if (window.MAUImageDB && window.MAUOcrEngine?.renderizarPaginas) {
+          try {
+            ui.pText.textContent = "Guardando imágenes de referencia…";
+            const imagenesRef = await window.MAUOcrEngine.renderizarPaginas(
+              file,
+              (info) => actualizarProgreso(info.pagina, info.totalPaginas, `Guardando imagen ${info.pagina}/${info.totalPaginas}…`),
+              { escala: 120, calidad: 0.55 }
+            );
+            await window.MAUImageDB.guardarImagenesPatron(nombreBase, {
+              imagenes: imagenesRef,
+              bloques: bloquesConTexto.map((b) => ({
+                nombre: b.nombre,
+                paginas: b.paginas,
+                requerimientos: b.requerimientos,
+                meta: b.meta || {}
+              }))
+            });
+            console.log(`[MAU] Imágenes de referencia guardadas para "${nombreBase}" (${imagenesRef.length} páginas)`);
+          } catch (e) {
+            console.warn("[MAU] No se pudieron guardar las imágenes de referencia:", e);
+          }
+        }
+
         resetSabanaUi();
         await aplicarBloquesModal(file, bloquesConTexto);
       }
@@ -2653,13 +2747,12 @@
   }
 
   // Exponer funciones internas para que el background (flujo de Telegram)
-  // pueda disparar la subida sin pasar por la UI ni re-pagar Claude.
-  // IMPORTANTE: estas funciones tienen el MISMO comportamiento que cuando el
-  // usuario hace todo manual; el flujo de Telegram pre-arma los bloques y los pasa.
+  // pueda disparar la subida usando la misma lógica que el modo Trabajar.
   window.MAUPanel = {
     estado,
     detectarRequerimientosPendientes,
-    aplicarBloquesModal,
+    procesarArchivosPdf,   // ← Telegram usa esto: mismo matching tipo+CUIL que el panel
+    aplicarBloquesModal,   // ← fallback por compatibilidad
     procesarTodo,
     asignarArchivoARequerimiento,
     renderTabla

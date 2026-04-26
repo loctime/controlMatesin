@@ -35,7 +35,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["panel.html", "panel.css", "panel.js", "matcher.js", "storage.js", "pdf-splitter.js", "ocr-engine.js", "modal-seleccion.js", "page-inject-confirm-patch.js", "vencimientos.js"],
+      "resources": ["panel.html", "panel.css", "panel.js", "matcher.js", "storage.js", "imagedb.js", "pdf-splitter.js", "ocr-engine.js", "modal-seleccion.js", "page-inject-confirm-patch.js", "vencimientos.js"],
       "matches": ["https://controldocumentario.com/*"]
     }
   ]

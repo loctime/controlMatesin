@@ -190,6 +190,23 @@ async function manejarMensaje(mensaje) {
     return await clasificarPaginaConClaude(base64, mediaType);
   }
 
+  if (accion === "ai:matchearConMapeo") {
+    const paginasClasificadas = mensaje?.payload?.paginasClasificadas;
+    if (!Array.isArray(paginasClasificadas)) throw new Error("Falta paginasClasificadas.");
+    const dataMapeo = await chrome.storage.local.get(KEY_PATRONES_SABANA);
+    const patrones = (dataMapeo[KEY_PATRONES_SABANA] || []).filter((p) =>
+      Array.isArray(p.firmaTipos) && Array.isArray(p.bloquesModal) && p.bloquesModal.length
+    );
+    if (!patrones.length) return null;
+    return await tgMatchearPatronConClaude(paginasClasificadas, patrones);
+  }
+
+  if (accion === "ai:compararConReferencia") {
+    const { nuevasPaginas, referencia } = mensaje?.payload || {};
+    if (!Array.isArray(nuevasPaginas) || !referencia) throw new Error("Faltan datos para comparar.");
+    return await compararPaginasConReferencia(nuevasPaginas, referencia);
+  }
+
   if (accion === "ai:probarConexion") {
     return await probarConexionClaude();
   }
@@ -1369,18 +1386,172 @@ function tgAutoAgrupar(paginasClasificadas) {
 }
 
 /**
+ * Comparación directa imagen vs imagen entre páginas nuevas y páginas de referencia del mapeo.
+ * Es el método principal de matching: Claude ve ambas imágenes y decide si son el mismo documento.
+ * Solo puede haber cambiado la fecha/monto — la estructura del formulario es idéntica.
+ *
+ * @param {Array<{pagina:number, base64:string}>} nuevasPaginas
+ * @param {{ imagenes: Array<{pagina:number, base64:string}>, bloques: Array }} referencia
+ * @returns {Promise<Array<{nombre,paginas,requerimientos,meta}>|null>}
+ */
+async function compararPaginasConReferencia(nuevasPaginas, referencia) {
+  if (!nuevasPaginas?.length || !referencia?.bloques?.length || !referencia?.imagenes?.length) return null;
+
+  const { apiKey, modelo } = await obtenerApiKeyYModelo();
+
+  // Por cada bloque, usar la primera página como imagen representativa
+  const bloquesRef = referencia.bloques.map((b) => {
+    const primeraPag = (b.paginas || [])[0];
+    const img = referencia.imagenes.find((i) => i.pagina === primeraPag);
+    return img ? { ...b, base64Ref: img.base64 } : null;
+  }).filter(Boolean);
+
+  if (!bloquesRef.length) return null;
+
+  // Armar content para Claude con imágenes de referencia + nuevas páginas
+  const content = [];
+
+  content.push({
+    type: "text",
+    text: "IMÁGENES DE REFERENCIA DEL MAPEO (documentos del período anterior, una por bloque):\n"
+  });
+
+  bloquesRef.forEach((b, idx) => {
+    const quien = [b.meta?.apellido, b.meta?.cuil ? `CUIL ${b.meta.cuil}` : ""].filter(Boolean).join(" ");
+    const destinos = (b.requerimientos || []).join(" + ");
+    content.push({ type: "text", text: `\nRef ${idx + 1}: "${b.nombre}" → ${destinos}${quien ? ` (${quien})` : ""}` });
+    content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b.base64Ref } });
+  });
+
+  content.push({
+    type: "text",
+    text: "\n\nPÁGINAS NUEVAS A ASIGNAR (mismo tipo de documentos, solo puede haber cambiado fecha/período/montos):\n"
+  });
+
+  nuevasPaginas.forEach((p) => {
+    content.push({ type: "text", text: `\nPágina nueva ${p.pagina}:` });
+    content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: p.base64 } });
+  });
+
+  content.push({
+    type: "text",
+    text: `
+
+Tu tarea: para cada página nueva, decir a cuál bloque de referencia corresponde.
+Compará el formulario/documento (estructura, título, campos) y el empleado (nombre, CUIL visibles).
+Solo pueden haber cambiado la fecha, período o montos — la estructura es idéntica.
+
+Si una página nueva no corresponde a ningún bloque de referencia, omitila.
+
+Respondé SOLO JSON válido, sin markdown. IMPORTANTE: en "bloque" usá el nombre EXACTO del bloque de referencia tal como aparece arriba (Ref 1, Ref 2, etc.). No inventes nombres de requerimientos.
+{
+  "asignaciones": [
+    {
+      "pagina_nueva": 1,
+      "bloque": "nombre exacto del bloque de referencia",
+      "meta": { "apellido": "", "cuil": "", "patente": "" }
+    }
+  ]
+}`
+  });
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({
+      model: modelo,
+      max_tokens: 2000,
+      messages: [{ role: "user", content }]
+    })
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`Claude (comparar imágenes) ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const json = await resp.json();
+  const textoResp = (json?.content?.[0]?.text || "").trim();
+
+  let parsed = null;
+  try { parsed = JSON.parse(textoResp); }
+  catch {
+    const m = textoResp.match(/\{[\s\S]*\}/);
+    if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+  }
+
+  if (!parsed?.asignaciones?.length) return null;
+
+  // Convertir asignaciones a formato bloquesFinales [{nombre, paginas, requerimientos, meta}]
+  const bloquesMap = new Map();
+  for (const asig of parsed.asignaciones) {
+    const nombreBloque = asig.bloque;
+    if (!nombreBloque) continue;
+    const refBloque = bloquesRef.find((b) => b.nombre === nombreBloque);
+    if (!bloquesMap.has(nombreBloque)) {
+      bloquesMap.set(nombreBloque, {
+        nombre: nombreBloque,
+        paginas: [],
+        requerimientos: refBloque?.requerimientos || [],
+        meta: asig.meta?.cuil || asig.meta?.apellido ? asig.meta : (refBloque?.meta || {})
+      });
+    }
+    if (asig.pagina_nueva) bloquesMap.get(nombreBloque).paginas.push(asig.pagina_nueva);
+  }
+
+  const resultado = Array.from(bloquesMap.values()).filter((b) => b.paginas.length && b.requerimientos.length);
+  return resultado.length ? resultado : null;
+}
+
+/**
  * Remapea las páginas de los bloques guardados al ORDEN ACTUAL del PDF.
  * Si el patrón guardado dice "bloque 1 = páginas 1,2 (tipo A, A)" pero ahora
  * los tipos A están en posiciones 3 y 5, devuelve "bloque 1 = páginas 3, 5".
  * Mismo algoritmo que panel.js línea 337-349.
  */
-function tgRemapearPaginas(patron, firmaActual) {
-  const disponibles = firmaActual.map((t, i) => ({ tipo: String(t || "desconocido"), pagina: i + 1, usada: false }));
+function tgRemapearPaginas(patron, paginasClasificadas) {
+  // Construir disponibles con info completa (tipo + cuil + apellido)
+  const normStr = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  const disponibles = paginasClasificadas.map((p, i) => ({
+    tipo: String(p.etiqueta || p.id || "desconocido"),
+    pagina: i + 1,
+    cuil: normStr(p.cuil || "").replace(/[^0-9]/g, ""),
+    apellido: normStr(p.apellido || ""),
+    usada: false
+  }));
+
   const remapeados = patron.bloquesModal.map((b) => {
+    const cuilBloque = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
+    const apellidoBloque = normStr(b.meta?.apellido || "");
     const nuevasPags = [];
+
     for (const pOriginal of (b.paginas || [])) {
       const tipoOriginal = String((patron.firmaTipos[pOriginal - 1]) || "desconocido");
-      const slot = disponibles.find((d) => !d.usada && d.tipo === tipoOriginal);
+
+      // Candidatos del mismo tipo no usados
+      const candidatos = disponibles.filter((d) => !d.usada && d.tipo === tipoOriginal);
+      if (!candidatos.length) continue;
+
+      let slot = null;
+
+      // 1) Si hay CUIL del bloque, buscar coincidencia exacta de CUIL
+      if (cuilBloque) {
+        slot = candidatos.find((d) => d.cuil && d.cuil === cuilBloque) || null;
+      }
+
+      // 2) Si no hubo match por CUIL, intentar por apellido
+      if (!slot && apellidoBloque) {
+        slot = candidatos.find((d) => d.apellido && d.apellido.includes(apellidoBloque)) || null;
+      }
+
+      // 3) Fallback: primer candidato disponible del tipo correcto
+      if (!slot) slot = candidatos[0];
+
       if (slot) {
         slot.usada = true;
         nuevasPags.push(slot.pagina);
@@ -1388,6 +1559,7 @@ function tgRemapearPaginas(patron, firmaActual) {
     }
     return { ...b, paginas: nuevasPags };
   }).filter((b) => b.paginas.length);
+
   return remapeados;
 }
 
@@ -1528,8 +1700,7 @@ async function tgArmarPlanSubida(paginasClasificadas) {
   // 2) Fallback: matching mecánico por multiset de etiquetas
   const { patron, calidadMatch } = await tgBuscarPatronSabana(paginasClasificadas);
   if (patron && Array.isArray(patron.bloquesModal) && patron.bloquesModal.length) {
-    const firmaActual = paginasClasificadas.map(p => p.etiqueta || p.id || "");
-    const bloquesRemapeados = tgRemapearPaginas(patron, firmaActual);
+    const bloquesRemapeados = tgRemapearPaginas(patron, paginasClasificadas);
     return {
       bloques: bloquesRemapeados,
       origen: "patron",
@@ -1856,10 +2027,9 @@ async function tgDispararSubidaEnPanel(tabId, base64Pdf, fileName, bloquesPlan) 
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const file = new File([bytes], name, { type: "application/pdf" });
 
-      // 4) Llamar a aplicarBloquesModal directamente con los bloques de Telegram.
-      //    Esto parte el PDF según los bloques y asigna cada uno a sus requerimientos,
-      //    SIN llamar a Claude.
-      log("Aplicando bloques (sin OCR)…");
+      // 4) Aplicar los bloques pre-calculados en Etapa 1 (sin re-clasificar con Claude).
+      //    Los bloques ya tienen cuil/apellido en meta desde la clasificación de Etapa 1.
+      log("Aplicando bloques (clasificación ya hecha en Etapa 1)…");
       try {
         await P.aplicarBloquesModal(file, bloques);
       } catch (e) {
