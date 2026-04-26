@@ -1211,53 +1211,123 @@ async function tgConseguirTabControldoc() {
  * Renderiza cada página del PDF como JPEG usando pdf.js cargado en una pestaña
  * abierta de controldocumentario.com. Devuelve array de base64 JPEG, una por página.
  */
+/**
+ * Renderiza el PDF en una pestaña YA ABIERTA (tabId externo).
+ * Devuelve [{pagina, base64}] para usar con compararPaginasConReferencia.
+ * NO abre ni cierra la pestaña — eso lo maneja el llamador.
+ */
+async function tgRenderPdfPaginasEnTab(base64Pdf, tabId) {
+  const [{ result } = {}] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (b64) => {
+      if (!window.pdfjsLib) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+          s.onload = resolve;
+          s.onerror = () => reject(new Error("No pude cargar pdf.js"));
+          document.head.appendChild(s);
+        });
+        if (window.pdfjsLib?.GlobalWorkerOptions) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+      }
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const pdf = await window.pdfjsLib.getDocument({ data: bytes }).promise;
+      const out = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+        out.push({ pagina: i, base64 });
+      }
+      return out;
+    },
+    args: [base64Pdf]
+  });
+  return Array.isArray(result) ? result : [];
+}
+
+/**
+ * Lee el primer patrón de referencia con imágenes disponible en el IndexedDB
+ * del contexto de la pestaña (origin de controldocumentario.com).
+ * Accede directamente a IndexedDB sin depender de window.MAUImageDB.
+ */
+async function tgLeerReferenciasDesdeTab(tabId, nombresPatrones) {
+  if (!nombresPatrones?.length) return null;
+  const [{ result } = {}] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (nombres) => {
+      function abrirDB() {
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open("mau_imagedb", 1);
+          req.onerror = () => reject(req.error);
+          req.onsuccess = () => resolve(req.result);
+          req.onupgradeneeded = (e) => {
+            e.target.result.createObjectStore("patron_imagenes", { keyPath: "nombre" });
+          };
+        });
+      }
+      function leer(db, nombre) {
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("patron_imagenes", "readonly");
+          const req = tx.objectStore("patron_imagenes").get(nombre);
+          req.onerror = () => reject(req.error);
+          req.onsuccess = () => resolve(req.result || null);
+        });
+      }
+      try {
+        const db = await abrirDB();
+        for (const nombre of nombres) {
+          const data = await leer(db, nombre);
+          if (data?.imagenes?.length && data?.bloques?.length) return data;
+        }
+        return null;
+      } catch { return null; }
+    },
+    args: [nombresPatrones]
+  });
+  return result || null;
+}
+
+/**
+ * Construye el preview de Telegram cuando los bloques vienen de comparación por imagen
+ * (no hay clasificación por tipo, solo info de bloque + empleado).
+ */
+function tgConstruirPreviewDesdeBlockes(bloques, nombreArchivo, totalPaginas) {
+  if (!bloques?.length) return `⚠️ No pude identificar los documentos en <b>${escapeHtml(nombreArchivo)}</b>.`;
+  const partes = [];
+  partes.push(`📋 <b>${escapeHtml(nombreArchivo)}</b> — <b>${totalPaginas}</b> página(s) identificadas por imagen:`);
+  partes.push("");
+  bloques.forEach((b, i) => {
+    const quien = [b.meta?.apellido, b.meta?.cuil].filter(Boolean).join(" | ") || "";
+    const reqs = (b.requerimientos || []).map(r => `<i>${escapeHtml(r)}</i>`).join(", ");
+    const pags = (b.paginas || []).join(", ");
+    partes.push(`📄 <b>Grupo ${i + 1}</b>${quien ? ` — ${escapeHtml(quien)}` : ""}`);
+    partes.push(`   Págs: ${pags} → ${reqs}`);
+  });
+  partes.push("");
+  partes.push(`👉 Etapa 1 lista. Respondé <b>SI</b> para subir todo, o <b>NO</b> para cancelar.`);
+  return partes.join("\n");
+}
+
 async function tgRenderPdfEnImagenes(base64Pdf) {
   const { tabId, abrimosNosotros } = await tgConseguirTabControldoc();
   try {
-    const [{ result } = {}] = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: "MAIN",
-      func: async (b64) => {
-        // Cargar pdf.js si no está
-        if (!window.pdfjsLib) {
-          await new Promise((resolve, reject) => {
-            const s = document.createElement("script");
-            s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-            s.onload = resolve;
-            s.onerror = () => reject(new Error("No pude cargar pdf.js"));
-            document.head.appendChild(s);
-          });
-          if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
-            window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-              "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-          }
-        }
-        // base64 → bytes
-        const bin = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const pdf = await window.pdfjsLib.getDocument({ data: bytes }).promise;
-        const out = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          // Escala 1.5 da buena calidad sin pesar mucho
-          const viewport = page.getViewport({ scale: 1.5 });
-          const canvas = document.createElement("canvas");
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-          const ctx = canvas.getContext("2d");
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          await page.render({ canvasContext: ctx, viewport }).promise;
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-          const base64 = dataUrl.split(",")[1];
-          out.push(base64);
-        }
-        return out;
-      },
-      args: [base64Pdf]
-    });
-    return Array.isArray(result) ? result : [];
+    const paginas = await tgRenderPdfPaginasEnTab(base64Pdf, tabId);
+    return paginas.map(p => p.base64); // compatibilidad: devuelve string[]
   } finally {
     if (abrimosNosotros) {
       try { await chrome.tabs.remove(tabId); } catch {}
@@ -2161,7 +2231,11 @@ async function tgConfirmarSubidaSabana(cfg) {
 
 /**
  * Handler principal cuando el usuario manda un PDF al bot.
- * Manda mensajes intermedios para que se vea en qué paso va.
+ * Usa el mismo flujo que el modo Trabajar local:
+ *   1) Renderizar páginas como imágenes (en pestaña controldoc)
+ *   2) Cargar imágenes de referencia del mapeo guardado (IndexedDB)
+ *   3) Comparar con Claude → 1 sola llamada API
+ *   4) Si no hay referencia → fallback al flujo clásico (clasificarSabanaConClaude)
  */
 async function tgManejarDocumento(cfg, doc) {
   const nombreArchivo = doc.file_name || "archivo.pdf";
@@ -2170,9 +2244,9 @@ async function tgManejarDocumento(cfg, doc) {
   const t0 = Date.now();
   const log = (txt) => tgEnviarMensaje(cfg.token, cfg.chatId, txt).catch(e => console.warn("[MAU] log fail", e));
 
-  await log(`📩 <b>Documento recibido</b>: ${escapeHtml(nombreArchivo)} (${(sizeBytes / 1024).toFixed(0)} KB)\n⏳ Paso 1/4: bajando de Telegram…`);
+  await log(`📩 <b>Documento recibido</b>: ${escapeHtml(nombreArchivo)} (${(sizeBytes / 1024).toFixed(0)} KB)\n⏳ Paso 1/3: bajando de Telegram…`);
 
-  // 1) Bajar
+  // 1) Bajar el PDF
   let baseInfo;
   try {
     baseInfo = await tgBajarArchivo(cfg.token, fileId);
@@ -2181,97 +2255,117 @@ async function tgManejarDocumento(cfg, doc) {
     throw e;
   }
   const { base64, sizeBytes: realSize } = baseInfo;
-  await log(`✅ Bajado (${(realSize / 1024).toFixed(0)} KB).\n⏳ Paso 2/4: mandando a Claude para clasificar…`);
 
-  // 2) Clasificar con Claude
-  let paginas;
+  // 2) Abrir pestaña, renderizar páginas y cargar referencia — todo en una pestaña
+  await log(`✅ Bajado (${(realSize / 1024).toFixed(0)} KB).\n⏳ Paso 2/3: renderizando páginas (necesito una pestaña de controldocumentario.com)…`);
+
+  let nuevasPaginas = []; // [{pagina, base64}]
+  let imagenesPorPagina = []; // [base64] para mandar a Telegram
+  let referenciaEncontrada = null;
+  let tabId = null;
+  let abrimosNosotros = false;
+
   try {
-    paginas = await clasificarSabanaConClaude(base64);
+    ({ tabId, abrimosNosotros } = await tgConseguirTabControldoc());
+
+    // Renderizar páginas del PDF como imágenes
+    nuevasPaginas = await tgRenderPdfPaginasEnTab(base64, tabId);
+    imagenesPorPagina = nuevasPaginas.map(p => p.base64);
+    console.log(`[MAU][TG] Renderizadas ${nuevasPaginas.length} páginas.`);
+
+    // Cargar imágenes de referencia del mapeo guardado
+    const dataPatrones = await chrome.storage.local.get(KEY_PATRONES_SABANA);
+    const patronesGuardados = dataPatrones[KEY_PATRONES_SABANA] || [];
+    const nombresPatrones = patronesGuardados.map(p => p.nombre).filter(Boolean);
+
+    if (nombresPatrones.length) {
+      referenciaEncontrada = await tgLeerReferenciasDesdeTab(tabId, nombresPatrones);
+      if (referenciaEncontrada) {
+        console.log(`[MAU][TG] Referencia encontrada: ${referenciaEncontrada.bloques.length} bloques, ${referenciaEncontrada.imagenes.length} imgs.`);
+      } else {
+        console.log("[MAU][TG] No hay imágenes de referencia guardadas en IndexedDB.");
+      }
+    }
   } catch (e) {
-    await log(`❌ Falló la clasificación con Claude: ${escapeHtml(e.message || String(e))}\n💡 Probá fijarte que tengas la API Key de Anthropic cargada en Opciones de la extensión.`);
+    console.warn("[MAU][TG] Error al renderizar/leer referencia:", e);
+    await log(`⚠️ No pude renderizar el PDF: ${escapeHtml(e.message || String(e))}\n💡 Asegurate de tener una pestaña de controldocumentario.com abierta.`);
+  } finally {
+    if (abrimosNosotros && tabId) {
+      try { await chrome.tabs.remove(tabId); } catch {}
+    }
+  }
+
+  // 3) ÚNICO MÉTODO: comparar imágenes nuevas contra referencia del mapeo guardado
+  let plan = null;
+
+  if (!nuevasPaginas.length) {
+    await log(`❌ No se pudieron renderizar las páginas del PDF. Asegurate de tener una pestaña de controldocumentario.com abierta.`);
+    return;
+  }
+
+  if (!referenciaEncontrada) {
+    await log(`❌ No hay mapeo guardado. Primero hacé un mapeo desde la PC en "Aprender" para que pueda procesar PDFs por Telegram.`);
+    return;
+  }
+
+  try {
+    await log(`⏳ Paso 3/3: macheando con mapeo guardado via Claude…`);
+    const bloques = await compararPaginasConReferencia(nuevasPaginas, referenciaEncontrada);
+    if (bloques?.length) {
+      const tComp = ((Date.now() - t0) / 1000).toFixed(1);
+      await log(`✅ Claude macheó <b>${bloques.length}</b> bloque(s) en ${tComp}s.`);
+      plan = { bloques, origen: "imagen", patronUsado: referenciaEncontrada.nombre || "referencia guardada" };
+      const preview = tgConstruirPreviewDesdeBlockes(bloques, nombreArchivo, nuevasPaginas.length);
+      await tgEnviarMensaje(cfg.token, cfg.chatId, preview);
+    } else {
+      await log(`❌ No pude machear el PDF con el mapeo guardado. El archivo puede ser muy distinto al mapeado. Revisá que sea el archivo correcto.`);
+      return;
+    }
+  } catch (e) {
+    await log(`❌ Falló el macheo: ${escapeHtml(e.message || String(e))}`);
     throw e;
   }
-  const tClasif = ((Date.now() - t0) / 1000).toFixed(1);
-  await log(`✅ Claude clasificó <b>${paginas.length}</b> páginas en ${tClasif}s.\n⏳ Paso 3/4: armando resumen…`);
 
-  // 3) Mandar preview
-  const preview = tgConstruirPreviewSabana(paginas, nombreArchivo, sizeBytes || realSize);
-  await tgEnviarMensaje(cfg.token, cfg.chatId, preview);
-
-  // 3.b) Armar el PLAN de subida (usando patrones aprendidos o agrupado automático)
-  let plan;
-  try {
-    plan = await tgArmarPlanSubida(paginas);
-  } catch (e) {
-    console.warn("[MAU] No pude armar plan:", e);
-    plan = { bloques: tgAutoAgrupar(paginas), origen: "autoagrupado", patronUsado: null };
-  }
-  // Construir mapa página → grupo, para taggear las imágenes después
-  const mapaPagAGrupo = {};
-  plan.bloques.forEach((b, i) => {
-    for (const num of (b.paginas || [])) mapaPagAGrupo[num] = { idx: i + 1, bloque: b };
-  });
-  await tgEnviarMensaje(cfg.token, cfg.chatId, tgConstruirMensajePlan(plan));
-
-  // 4) Renderizar el PDF como imágenes y mandar cada una al chat
-  await log(`⏳ Paso 4/4: renderizando cada página como imagen…\n💡 Para esto necesito una pestaña de controldocumentario.com abierta.`);
-  let imagenesPorPagina = [];
-  try {
-    imagenesPorPagina = await tgRenderPdfEnImagenes(base64);
-  } catch (e) {
-    console.warn("[MAU] No pude renderizar el PDF:", e);
-    await log(`⚠️ No pude renderizar el PDF como imágenes: ${escapeHtml(e.message || String(e))}\n💡 Asegurate de tener una pestaña de controldocumentario.com abierta y volvé a intentar.\nEl resumen de clasificación de arriba igual sirve.`);
-  }
-
+  // 4) Mandar las páginas como imágenes al chat de Telegram
+  // 4) Mandar las páginas renderizadas como imágenes al chat (con labels del macheo)
   if (imagenesPorPagina.length) {
-    await log(`✅ Rendericé <b>${imagenesPorPagina.length}</b> páginas. Mandando como imágenes…`);
+    await log(`⏳ Enviando <b>${imagenesPorPagina.length}</b> páginas como imágenes…`);
+    const mapaPagAGrupo = {};
+    (plan?.bloques || []).forEach((b, i) => {
+      for (const num of (b.paginas || [])) mapaPagAGrupo[num] = { idx: i + 1, bloque: b };
+    });
     const baseNombre = (nombreArchivo || "pagina").replace(/\.pdf$/i, "");
     for (let i = 0; i < imagenesPorPagina.length; i++) {
       const numPag = i + 1;
-      // Buscar la clasificación de esa página
-      const meta = paginas.find(p => p.pagina === numPag) || paginas[i] || {};
-      const persona = [meta.apellido, meta.nombre].filter(Boolean).join(" ").trim();
-      const ico = meta.id === "desconocido" ? "❓" : "📄";
-      const etiqueta = meta.etiqueta || meta.id || "(sin clasificar)";
-      const extras = [];
-      if (persona) extras.push(persona);
-      if (meta.cuil) extras.push(meta.cuil);
-      if (meta.patente) extras.push(`patente ${meta.patente}`);
-      if (meta.periodo) extras.push(meta.periodo);
-      const cola = extras.length ? ` — ${extras.join(" · ")}` : "";
-      // Info del grupo al que pertenece esta página
       const info = mapaPagAGrupo[numPag];
       const tagGrupo = info ? ` 🟦 G${info.idx}` : "";
-      const destinos = info && info.bloque.requerimientos && info.bloque.requerimientos.length
+      const destinos = info?.bloque?.requerimientos?.length
         ? `\n➡️ ${info.bloque.requerimientos.map(r => escapeHtml(r)).join(" + ")}`
         : "";
-      const caption = `${ico} <b>Pág. ${numPag}/${imagenesPorPagina.length}</b>${tagGrupo}: ${escapeHtml(etiqueta)}${escapeHtml(cola)}${destinos}`;
-      const fileName = `${baseNombre}_pag${numPag}.jpg`;
+      const nombreBloque = info ? escapeHtml(info.bloque.nombre || "") : "sin asignar ⚠️";
+      const quien = info?.bloque?.meta ? [info.bloque.meta.apellido, info.bloque.meta.cuil].filter(Boolean).join(" | ") : "";
+      const caption = `📄 <b>Pág. ${numPag}/${imagenesPorPagina.length}</b>${tagGrupo}: ${nombreBloque}${quien ? ` — ${escapeHtml(quien)}` : ""}${destinos}`;
       try {
-        await tgEnviarFoto(cfg.token, cfg.chatId, imagenesPorPagina[i], fileName, caption);
+        await tgEnviarFoto(cfg.token, cfg.chatId, imagenesPorPagina[i], `${baseNombre}_pag${numPag}.jpg`, caption);
       } catch (e) {
         console.warn(`[MAU] Error mandando página ${numPag}:`, e);
         await log(`❌ No pude mandar la página ${numPag}: ${escapeHtml(e.message || String(e))}`);
       }
-      // Pausa chiquita para no pegarle al rate limit (30 msg/seg)
       await new Promise(r => setTimeout(r, 350));
     }
-
     const tTotal = ((Date.now() - t0) / 1000).toFixed(1);
-    await log(`✅ <b>Listo</b>. Te mandé las <b>${imagenesPorPagina.length}</b> páginas como imágenes en ${tTotal}s. Revisá la clasificación de cada una arriba.\n\n👉 Si está todo bien, respondé <b>SI</b> y arranco a subir todo automáticamente.\n👉 Si está mal, respondé <b>NO</b> y descarto la sábana.`);
+    await log(`✅ <b>Listo</b>. Te mandé las <b>${imagenesPorPagina.length}</b> páginas en ${tTotal}s.\n\n👉 Si está todo bien, respondé <b>SI</b> para subir todo automáticamente.\n👉 Si está mal, respondé <b>NO</b> y descarto la sábana.`);
   }
 
-  // 5) Guardar SOLO los datos chicos para la Etapa 2 (no las imágenes/PDFs partidos
-  //    para no pegar contra el límite de 5 MB de chrome.storage.local).
-  //    Guardamos el fileId del PDF original — se puede re-bajar de Telegram cuando haga falta.
+  // 5) Guardar estado para Etapa 2
   try {
     await chrome.storage.local.set({
       matesin_tg_pendiente_sabana: {
         fileId,
         nombreArchivo,
         sizeBytes: realSize,
-        paginas, // clasificación: liviana, JSON
-        plan,    // bloques + destinos, listo para subir en Etapa 2
+        paginas: [],
+        plan,
         ts: Date.now()
       }
     });
