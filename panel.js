@@ -2569,7 +2569,13 @@
       patronElegido = await elegirPatronUI(patrones);
     }
 
-    const bloquesIniciales = patronElegido?.bloquesModal || [];
+    // Cargar bloques del patrón existente SIN páginas asignadas.
+    // Así el usuario solo asigna las páginas del PDF nuevo sin luchar contra
+    // asignaciones viejas que ya no corresponden.
+    const bloquesIniciales = (patronElegido?.bloquesModal || []).map(b => ({
+      ...b,
+      paginas: []
+    }));
     const nombreBase = patronElegido?.nombre
       || `mapeo-${new Date().toISOString().slice(0, 10)}-${file.name.replace(/\.pdf$/i, "")}`;
 
