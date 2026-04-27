@@ -61,6 +61,7 @@ En `asignarArchivoARequerimiento`, para elegir la fila correcta entre múltiples
 - Fallback de período no usaba recurso para filtrar → ahora prefiere filas con persona
 - tgRenderPdfEnImagenes devolvía `[base64]` no `[{pagina, base64}]` → corregido
 - FERNANDEZ DIEGO vs FERNANDEZ ENRIQUE se confundían → solucionado con nombre completo en parsearRecurso + metaNombreCompleto en asignarArchivoARequerimiento
+- Bloque de 3 páginas subía solo 2 → Claude recibía solo 1 imagen de referencia por bloque (la primera página). Corregido: ahora se mandan TODAS las imágenes del bloque. Claude puede reconocer cualquier formulario del bloque, no solo el primero.
 
 ## Cosas que NO hacer
 - No agregar clasificación de documentos por texto (TIPOS_DOCUMENTO está en background.js pero NO se usa para el flujo principal de matching — solo el mapeo visual manda)
