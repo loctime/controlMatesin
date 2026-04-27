@@ -1452,6 +1452,8 @@ PROHIBIDO:
 - No busques similitudes parciales. Solo coincidencia exacta de tipo de formulario.
 - Si una página no coincide claramente con ningún Ref → bloque: null.
 
+IMPORTANTE: reportá TODAS las páginas nuevas en el JSON, incluso las que no coinciden (bloque: null). Siempre leé e informá el CUIL aunque no haya match.
+
 Respondé SOLO JSON válido, sin markdown, sin texto extra:
 {
   "paginas": [
@@ -1506,7 +1508,11 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
   const bloquesMapIdx = new Map(); // key: índice en bloquesRef → { refBloque, paginas }
 
   for (const item of parsed.paginas) {
-    if (!item.bloque || !item.pagina_nueva) continue;
+    if (!item.pagina_nueva) continue;
+    if (!item.bloque) {
+      console.log(`[MAU] Pág ${item.pagina_nueva} → sin asignar (CUIL=${normCuil(item.cuil_leido) || "no leído"})`);
+      continue;
+    }
 
     // Resolver el bloque que indicó Claude → primero por nombre exacto, luego por "Ref N"
     let refIdx = bloquesRef.findIndex((b) => b.nombre === item.bloque);
