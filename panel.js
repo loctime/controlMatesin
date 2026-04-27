@@ -346,157 +346,65 @@
     console.log(`[MAU] [TRABAJAR] Procesando ${archivos.length} PDF(s). Origen: ${origen}`);
     if (!estado.requerimientos.length) await detectarRequerimientosPendientes();
 
-    if (!window.MAUOcrEngine?.extraerTextoPorPagina) {
-      mostrarToast("El motor OCR no está disponible.");
-      return;
-    }
-
     const patrones = (await window.MAUStorage.leerPatronesSabana()) || [];
     if (!patrones.length) {
       mostrarToast("No hay mapeo guardado. Primero subí una sábana en la pestaña «Subir sábana».");
       return;
     }
 
-    // Reunir todos los bloquesModal de todos los patrones para buscar coincidencias
-    const todosLosBloques = patrones.flatMap((p) =>
-      (p.bloquesModal || []).filter((b) => b.requerimientos?.length).map((b) => ({
-        ...b,
-        _firmaTiposPatron: p.firmaTipos || []
-      }))
-    );
+    // Cargar todos los mapeos disponibles con imágenes
+    ui.pText.textContent = `Cargando mapeos disponibles…`;
+    const referenciasDisponibles = [];
+    for (const p of patrones) {
+      if (!p.nombre) continue;
+      const ref = await window.MAUImageDB.leerImagenesPatron(p.nombre);
+      const tieneImagenes = (ref?.imagenesPorBloque && Object.keys(ref.imagenesPorBloque).length > 0)
+        || (ref?.imagenes?.length > 0);
+      if (tieneImagenes && ref?.bloques?.length) {
+        referenciasDisponibles.push(ref);
+      }
+    }
+
+    if (!referenciasDisponibles.length) {
+      mostrarToast(`No hay mapeos con imágenes guardadas. Hacé un mapeo primero desde "Aprender".`);
+      return;
+    }
+
+    console.log(`[MAU][TRABAJAR] ${referenciasDisponibles.length} mapeo(s) disponibles: ${referenciasDisponibles.map(r => r.nombre).join(", ")}`);
 
     for (const archivo of archivos) {
-      console.log("[MAU] [TRABAJAR] Identificando:", archivo.name);
-      ui.pText.textContent = `Analizando ${archivo.name} con Claude…`;
+      console.log("[MAU] [TRABAJAR] Procesando:", archivo.name);
+      ui.pText.textContent = `Preparando páginas de «${archivo.name}»…`;
       try {
-        const textos = await window.MAUOcrEngine.extraerTextoPorPagina(archivo, (info) => {
-          if (info.pagina && info.totalPaginas) {
-            const pct = Math.round((info.pagina / info.totalPaginas) * 100);
-            actualizarProgreso(info.pagina, info.totalPaginas, info.mensaje || `Leyendo página ${info.pagina}/${info.totalPaginas}…`);
-            ui.pInner.style.width = `${pct}%`;
-          }
-        });
+        // Renderizar páginas una sola vez
+        const nuevasPaginas = await window.MAUOcrEngine.renderizarPaginas(
+          archivo,
+          (info) => actualizarProgreso(info.pagina, info.totalPaginas, `Preparando página ${info.pagina}/${info.totalPaginas}…`),
+          { escala: 120, calidad: 0.60 }
+        );
 
-        // ── MATCHING: Comparación por imagen (regla principal) ──
-        const normStr = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-
+        // Probar cada mapeo en orden hasta que uno machee
         let bloquesFinales = null;
-
-        // 1) Método principal: comparar imágenes nuevas contra imágenes de referencia del mapeo
-        if (window.MAUImageDB && window.MAUOcrEngine?.renderizarPaginas && window.MAUStorage?.compararConReferencia) {
+        for (const ref of referenciasDisponibles) {
+          ui.pText.textContent = `Macheando con "${ref.nombre}"…`;
+          console.log(`[MAU][TRABAJAR] Probando mapeo "${ref.nombre}"…`);
           try {
-            ui.pText.textContent = `Cargando imágenes de referencia…`;
-            const nombresPatrones = patrones.map((p) => p.nombre).filter(Boolean);
-            let referenciaEncontrada = null;
-            for (const nombre of nombresPatrones) {
-              const ref = await window.MAUImageDB.leerImagenesPatron(nombre);
-              if (ref?.imagenes?.length && ref?.bloques?.length) {
-                referenciaEncontrada = ref;
-                console.log(`[MAU][TRABAJAR] Referencia de imágenes encontrada: "${nombre}" (${ref.imagenes.length} imgs, ${ref.bloques.length} bloques)`);
-                break;
-              }
-            }
-
-            if (referenciaEncontrada) {
-              ui.pText.textContent = `Renderizando páginas de «${archivo.name}»…`;
-              const nuevasPaginas = await window.MAUOcrEngine.renderizarPaginas(
-                archivo,
-                (info) => actualizarProgreso(info.pagina, info.totalPaginas, `Preparando página ${info.pagina}/${info.totalPaginas}…`),
-                { escala: 120, calidad: 0.60 }
-              );
-
-              ui.pText.textContent = `Comparando con mapeo via Claude…`;
-              console.log(`[MAU][TRABAJAR] Comparando ${nuevasPaginas.length} páginas nuevas contra ${referenciaEncontrada.bloques.length} bloques de referencia…`);
-              const resultado = await window.MAUStorage.compararConReferencia(nuevasPaginas, referenciaEncontrada);
-              if (resultado && resultado.length) {
-                console.log(`[MAU][TRABAJAR] ✅ Comparación por imagen exitosa: ${resultado.length} bloque(s) asignados`);
-                bloquesFinales = resultado;
-              } else {
-                console.log("[MAU][TRABAJAR] Comparación por imagen no retornó resultados, pasando a fallback.");
-              }
+            const resultado = await window.MAUStorage.compararConReferencia(nuevasPaginas, ref);
+            if (resultado?.length) {
+              console.log(`[MAU][TRABAJAR] ✅ Macheó con "${ref.nombre}": ${resultado.length} bloque(s)`);
+              bloquesFinales = resultado;
+              break;
             } else {
-              console.log("[MAU][TRABAJAR] No hay imágenes de referencia guardadas, usando fallback.");
+              console.log(`[MAU][TRABAJAR] "${ref.nombre}" no coincide, probando siguiente…`);
             }
           } catch (e) {
-            console.warn("[MAU][TRABAJAR] Comparación por imagen falló, usando fallback:", e);
-          }
-        }
-
-        // 2) Fallback: matching Claude por texto (clasificación ya hecha en textos)
-        if (!bloquesFinales) {
-          try {
-            ui.pText.textContent = `Macheando «${archivo.name}» con mapeo via Claude…`;
-            console.log(`[MAU][TRABAJAR] Fallback: pidiendo match por texto a Claude con ${textos.length} páginas…`);
-            const matchClaude = await window.MAUStorage.matchearConMapeo(textos);
-            if (matchClaude && Array.isArray(matchClaude.bloques) && matchClaude.bloques.length) {
-              console.log(`[MAU][TRABAJAR] Claude matcheó patrón "${matchClaude.patronMatch}" (confianza ${matchClaude.confianza}%)`);
-              bloquesFinales = matchClaude.bloques;
-            } else {
-              console.log("[MAU][TRABAJAR] Fallback Claude texto no encontró match, usando código.");
-            }
-          } catch (e) {
-            console.warn("[MAU][TRABAJAR] Fallback Claude texto falló, usando código:", e);
-          }
-        }
-
-        // 2) Fallback: matching mecánico por score tipo+CUIL
-        if (!bloquesFinales) {
-          console.log(`[MAU][TRABAJAR] Fallback código — Bloques en mapeo: ${todosLosBloques.length}`);
-          todosLosBloques.forEach((b, i) => {
-            const tipos = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "?");
-            console.log(`[MAU][TRABAJAR]   B[${i}] "${b.nombre}" tipos=[${tipos.join(',')}] reqs=${(b.requerimientos||[]).join('|')}`);
-          });
-
-          const asignaciones = new Map();
-          const bloqueDeKeys = new Map();
-
-          textos.forEach((t) => {
-            if (!t.etiqueta && t.id === "desconocido") return;
-            const cuilPag = normStr(t.cuil || "").replace(/[^0-9]/g, "");
-            const apellidoPag = normStr(t.apellido || "");
-            console.log(`[MAU][TRABAJAR] Pág.${t.pagina}: id="${t.id}" etiq="${t.etiqueta}" cuil="${t.cuil}" apellido="${t.apellido}"`);
-
-            let mejorBloque = null;
-            let mejorScore = -1;
-
-            todosLosBloques.forEach((b, bi) => {
-              const tiposBloque = (b.paginas || []).map((p) => (b._firmaTiposPatron[p - 1]) || "desconocido");
-              const tiposConocidos = tiposBloque.filter(tp => tp !== "desconocido");
-              const coincideTipo = tiposBloque.includes(t.etiqueta) || tiposBloque.includes(t.id);
-              if (tiposConocidos.length > 0 && !coincideTipo) return;
-              if (tiposConocidos.length === 0) {
-                const cuilBloqFallback = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
-                if (!cuilBloqFallback || !cuilPag || cuilPag !== cuilBloqFallback) return;
-              }
-              let score = coincideTipo ? 1 : 0;
-              const cuilBloque = normStr(b.meta?.cuil || "").replace(/[^0-9]/g, "");
-              const apellidoBloque = normStr(b.meta?.apellido || "");
-              if (cuilBloque && cuilPag && cuilPag === cuilBloque) score += 10;
-              else if (apellidoBloque && apellidoPag && apellidoPag.includes(apellidoBloque)) score += 5;
-              else if (apellidoBloque && normStr([t.textoEstable, t.nombre].join(" ")).includes(apellidoBloque)) score += 2;
-              if (score > mejorScore) { mejorScore = score; mejorBloque = bi; bloqueDeKeys.set(bi, b); }
-            });
-
-            if (mejorBloque !== null) {
-              console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} matcheó "${bloqueDeKeys.get(mejorBloque)?.nombre}" (score=${mejorScore})`);
-              if (!asignaciones.has(mejorBloque)) asignaciones.set(mejorBloque, []);
-              asignaciones.get(mejorBloque).push(t.pagina);
-            } else {
-              console.log(`[MAU][TRABAJAR]   → Pág.${t.pagina} SIN match`);
-            }
-          });
-
-          if (asignaciones.size) {
-            bloquesFinales = [];
-            for (const [bi, paginas] of asignaciones) {
-              const b = bloqueDeKeys.get(bi);
-              bloquesFinales.push({ nombre: b.nombre, paginas, requerimientos: b.requerimientos || [], meta: b.meta || null });
-            }
+            console.warn(`[MAU][TRABAJAR] Error al machear con "${ref.nombre}":`, e);
           }
         }
 
         if (!bloquesFinales || !bloquesFinales.length) {
-          mostrarToast(`No se pudo identificar «${archivo.name}» con el mapeo guardado.`);
+          mostrarToast(`El archivo es muy distinto al mapeado, revisá que sea el correcto.`);
+          console.warn("[MAU][TRABAJAR] Sin resultado en ningún mapeo.");
           continue;
         }
 

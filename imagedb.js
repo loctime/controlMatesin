@@ -54,7 +54,12 @@
         db.close();
         const r = e.target.result;
         if (!r) { resolve(null); return; }
-        resolve({ imagenes: r.imagenes || [], bloques: r.bloques || [] });
+        resolve({
+          nombre: r.nombre,
+          imagenes: r.imagenes || [],
+          imagenesPorBloque: r.imagenesPorBloque || null,
+          bloques: r.bloques || []
+        });
       };
       req.onerror = (e) => { db.close(); reject(e.target.error); };
     });

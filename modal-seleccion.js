@@ -506,7 +506,7 @@
       const tagEl = el.querySelector(".mau-thumb-tag");
       if (tagEl) {
         if (bloquesDeEsta.length > 0) {
-          tagEl.textContent = bloquesDeEsta.map(({ b, idx }) => `Bloque ${idx + 1}`).join(" · ");
+          tagEl.textContent = bloquesDeEsta.map(({ b }) => `Bloque ${b.id}`).join(" · ");
           tagEl.style.color = "#0f8a4c";
           tagEl.style.fontWeight = "600";
         } else {
