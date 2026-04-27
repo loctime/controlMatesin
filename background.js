@@ -1424,6 +1424,12 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
 
   if (!bloquesRef.length) return null;
 
+  // Log diagnóstico: cuántas imágenes de referencia tiene cada bloque
+  bloquesRef.forEach((b, idx) => {
+    console.log(`[MAU] Ref ${idx+1} "${b.meta?.apellido || b.nombre}": ${b.imagenesRef.length} imagen(es) de referencia, páginas del mapeo: [${(b.paginas||[]).join(",")}]`);
+  });
+  console.log(`[MAU] Páginas nuevas a comparar: ${nuevasPaginas.length}`);
+
   // ── 1 sola llamada: Claude extrae tipo + CUIL de cada página, el código hace el match ──
   const content = [];
 
@@ -1450,22 +1456,28 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
     type: "text",
     text: `
 
-TAREA: para cada página nueva, encontrá el Ref al que pertenece visualmente.
+TAREA: para cada página nueva, determiná a qué Ref pertenece.
 
-CRITERIO PRINCIPAL — comparación visual:
-Cada Ref tiene uno o más formularios (Formulario 1, Formulario 2, etc.). Una página nueva pertenece a un Ref si se ve igual que CUALQUIERA de los formularios de ese Ref: mismo título, mismo layout, mismos logos, misma estructura. Si no coincide con ningún formulario de ningún Ref → bloque: null.
+CÓMO HACER EL MATCH:
+Cada Ref representa un empleado y tiene uno o más tipos de formulario (Formulario 1, Formulario 2, etc.).
+Una página nueva pertenece a un Ref si es del MISMO TIPO de formulario que alguno de sus formularios:
+  - Mismo nombre o título del formulario
+  - Misma empresa o institución que lo emite
+  - Misma estructura general del documento
 
-CRITERIO SECUNDARIO — CUIL:
-Si la página nueva tiene un CUIL impreso, debe coincidir con el CUIL del Ref asignado. Un dígito distinto = no es el mismo → bloque: null.
+No importa el orden en que vienen las páginas, la calidad del scan, ni pequeñas diferencias de contenido.
+Lo que importa es si es el MISMO TIPO de formulario.
 
-PROHIBIDO:
-- No asignés si tenés dudas.
-- No busques similitudes parciales. Solo coincidencia exacta de tipo de formulario.
-- Si una página no coincide claramente con ningún Ref → bloque: null.
+CUIL (identificador del empleado):
+Si la página tiene un CUIL legible, usalo para confirmar a qué Ref pertenece.
+Si el CUIL no es legible o no aparece, hacé el match solo por tipo de formulario.
+Un CUIL distinto al del Ref = la página pertenece al Ref con ese CUIL, no al que asignaste visualmente.
 
-IMPORTANTE: reportá TODAS las páginas nuevas en el JSON, incluso las que no coinciden (bloque: null). Siempre leé e informá el CUIL aunque no haya match.
+Si una página definitivamente no es ningún tipo de formulario de ningún Ref → bloque: null.
 
-Respondé SOLO JSON válido, sin markdown, sin texto extra:
+IMPORTANTE: reportá TODAS las páginas nuevas en el JSON, incluso las que no coinciden (bloque: null). Leé e informá el CUIL cuando sea legible.
+
+Respondé SOLO JSON válido, sin texto extra:
 {
   "paginas": [
     { "pagina_nueva": 1, "cuil_leido": "20-12345678-9", "bloque": "Ref 1" },
@@ -1482,7 +1494,7 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true"
     },
-    body: JSON.stringify({ model: modelo, max_tokens: 1500, messages: [{ role: "user", content }] })
+    body: JSON.stringify({ model: modelo, max_tokens: 2500, messages: [{ role: "user", content }] })
   });
 
   if (!resp.ok) {
@@ -1492,6 +1504,7 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
 
   const json = await resp.json();
   const textoResp = (json?.content?.[0]?.text || "").trim();
+  console.log(`[MAU] Respuesta Claude (${textoResp.length} chars):`, textoResp.slice(0, 800));
 
   let parsed = null;
   // Claude ahora razona primero y pone el JSON al final en un bloque ```json ... ```
@@ -1549,8 +1562,9 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
         refIdx = corrIdx;
         refBloque = bloquesRef[corrIdx];
       } else {
-        console.log(`[MAU] Pág ${item.pagina_nueva}: CUIL ${cuilLeido} no coincide con ningún bloque, descartando`);
-        continue;
+        // El CUIL leído no es de ningún empleado conocido (puede ser el CUIL del empleador
+        // que aparece impreso en el documento). En ese caso confiamos en el match visual de Claude.
+        console.log(`[MAU] Pág ${item.pagina_nueva}: CUIL ${cuilLeido} no es de ningún empleado conocido (posiblemente CUIL del empleador) → se mantiene asignación visual a Ref ${refIdx+1} (${refBloque.meta?.apellido || ""})`);
       }
     }
 
@@ -1571,15 +1585,19 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
   // Validar que cada bloque encontrado tiene TODAS las páginas que dice el mapeo.
   // Si falta alguna página, el bloque se descarta (el mapeo manda).
   // Bloques de otras personas que sí están completos se suben igual (listas cortas son válidas).
+  const descartados = [];
   const resultado = Array.from(bloquesMapIdx.values()).filter((b) => {
     if (!b.paginas.length || !b.requerimientos.length) return false;
     if (b.paginasMapeo > 0 && b.paginas.length < b.paginasMapeo) {
       console.log(`[MAU] Bloque "${b.meta?.apellido || b.nombre}" descartado: encontradas ${b.paginas.length}/${b.paginasMapeo} páginas del mapeo`);
+      descartados.push(b);
       return false;
     }
     return true;
   });
 
+  // Adjuntamos los descartados al array resultado para que los callers puedan informar al usuario
+  if (resultado.length) resultado.descartados = descartados;
   return resultado.length ? resultado : null;
 }
 
@@ -2447,12 +2465,14 @@ async function tgManejarDocumento(cfg, doc) {
     // 5) Claude machea imagen vs imagen — 1 sola llamada por mapeo hasta encontrar
     await log(`⏳ Claude macheando el documento con el mapeo (${referenciasDisponibles.length} mapeo(s))…`);
     let bloquesFinales = null;
+    let bloquesDescartados = [];
     for (const ref of referenciasDisponibles) {
       try {
         const resultado = await compararPaginasConReferencia(nuevasPaginas, ref);
         if (resultado?.length) {
           bloquesFinales = resultado;
-          console.log(`[MAU][TG] ✅ Macheó con "${ref.nombre}": ${resultado.length} bloque(s)`);
+          bloquesDescartados = resultado.descartados || [];
+          console.log(`[MAU][TG] ✅ Macheó con "${ref.nombre}": ${resultado.length} bloque(s), ${bloquesDescartados.length} descartado(s)`);
           break;
         }
       } catch (e) {
@@ -2485,9 +2505,25 @@ async function tgManejarDocumento(cfg, doc) {
       );
     });
 
+    // Mostrar también los bloques descartados por páginas incompletas
+    const lineasDescartadas = bloquesDescartados.map(b => {
+      const persona = b.meta?.apellido || "Sin nombre";
+      const nPagsDoc = (b.paginas || []).length;
+      const nPagsMapeo = b.paginasMapeo || 0;
+      return (
+        `👤 <b>${escapeHtml(persona)}</b>\n` +
+        `   Bloque original: ${nPagsMapeo} pág${nPagsMapeo !== 1 ? "s" : ""}. · Tu documento: ${nPagsDoc} pág${nPagsDoc !== 1 ? "s" : ""}. ⚠️ Páginas incompletas — NO se sube`
+      );
+    });
+
+    const parteDescartados = lineasDescartadas.length
+      ? `\n\n<b>No se van a subir (páginas incompletas):</b>\n\n` + lineasDescartadas.join("\n\n")
+      : "";
+
     await log(
       `✅ Coincidencia${bloquesFinales.length > 1 ? "s" : ""} encontrada${bloquesFinales.length > 1 ? "s" : ""}:\n\n` +
       lineasResumen.join("\n\n") +
+      parteDescartados +
       `\n\n¿Lo subimos? Respondé <b>SI</b> para confirmar.`
     );
 

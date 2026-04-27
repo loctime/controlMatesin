@@ -72,7 +72,7 @@ En `asignarArchivoARequerimiento`, para elegir la fila correcta entre múltiples
 - No agregar clasificación de documentos por texto (TIPOS_DOCUMENTO está en background.js pero NO se usa para el flujo principal de matching — solo el mapeo visual manda)
 - No agregar llamadas extra a Claude por página (costo)
 - No cambiar el flujo de 1 llamada a multi-llamada
-- No confundir el CUIL del empleado (en el documento) con el CUIL del empleador (en las filas de CD, que es siempre el de Matesin)
+- No confundir el CUIL del empleado (en el documento) con el CUIL del empleador (en las filas de CD, que es siempre el de Matesin). En los documentos aparece el CUIL del empleador impreso como empresa — si Claude lee ese CUIL y no matchea ningún bloque, NO descartar la página: confiar en el match visual. Solo redirigir si el CUIL leído matchea un bloque DIFERENTE al que asignó Claude.
 - NO descartar bloques válidos de otras personas si una persona tiene páginas faltantes. La validación es POR BLOQUE, no global.
 - No agregar chain-of-thought al prompt de Claude para matching — empeora las asignaciones porque Claude se convence a sí mismo de cosas incorrectas. El prompt debe ser directo y simple.
 
