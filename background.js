@@ -1401,7 +1401,7 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
 
   const { apiKey, modelo } = await obtenerApiKeyYModelo();
 
-  // Por cada bloque, obtener su imagen representativa (soporta formato nuevo y viejo)
+  // Obtener imagen de referencia por bloque
   const bloquesRef = referencia.bloques.map((b) => {
     let base64Ref = null;
     if (referencia.imagenesPorBloque && referencia.imagenesPorBloque[b.nombre]) {
@@ -1416,28 +1416,22 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
 
   if (!bloquesRef.length) return null;
 
-  // Armar content para Claude con imágenes de referencia + nuevas páginas
+  // ── 1 sola llamada: Claude extrae tipo + CUIL de cada página, el código hace el match ──
   const content = [];
 
-  content.push({
-    type: "text",
-    text: "IMÁGENES DE REFERENCIA DEL MAPEO (documentos del período anterior, una por bloque):\n"
-  });
-
+  // Mostrar referencias con su CUIL explícito en texto (no hace falta que Claude lo lea de la imagen)
+  content.push({ type: "text", text: "BLOQUES DE REFERENCIA (tipo de formulario + CUIL del empleado):\n" });
   bloquesRef.forEach((b, idx) => {
-    const quien = [b.meta?.apellido, b.meta?.cuil ? `CUIL ${b.meta.cuil}` : ""].filter(Boolean).join(" ");
-    const destinos = (b.requerimientos || []).join(" + ");
-    content.push({ type: "text", text: `\nRef ${idx + 1}: "${b.nombre}" → ${destinos}${quien ? ` (${quien})` : ""}` });
+    const cuil = b.meta?.cuil ? `CUIL: ${b.meta.cuil}` : "CUIL: (no registrado)";
+    const apellido = b.meta?.apellido || "";
+    content.push({ type: "text", text: `\nRef ${idx + 1}: ${apellido} — ${cuil}` });
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b.base64Ref } });
   });
 
-  content.push({
-    type: "text",
-    text: "\n\nPÁGINAS NUEVAS A ASIGNAR (mismo tipo de documentos, solo puede haber cambiado fecha/período/montos):\n"
-  });
-
+  // Páginas nuevas
+  content.push({ type: "text", text: "\n\nPÁGINAS NUEVAS:\n" });
   nuevasPaginas.forEach((p) => {
-    content.push({ type: "text", text: `\nPágina nueva ${p.pagina}:` });
+    content.push({ type: "text", text: `\nPágina ${p.pagina}:` });
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: p.base64 } });
   });
 
@@ -1445,26 +1439,24 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
     type: "text",
     text: `
 
-TAREA: Para cada página nueva, determiná si es EXACTAMENTE el mismo formulario que alguna referencia.
+TAREA: para cada página nueva, encontrá el Ref que es VISUALMENTE IDÉNTICO en estructura y tipo de formulario.
 
-CRITERIO DE MATCH — deben cumplirse LOS TRES:
-1. El TÍTULO del formulario es el mismo (palabra por palabra)
-2. La ESTRUCTURA visual es idéntica (mismas secciones, mismos campos impresos)
-3. Solo difieren datos variables: fecha, período, monto, nombre de empleado, CUIL
+CRITERIO PRINCIPAL — comparación visual estricta:
+La página nueva debe verse igual que la imagen del Ref: mismo título, mismo layout, mismos logos, misma estructura de secciones. Si visualmente no coinciden → bloque: null.
 
-Si no se cumplen los tres criterios → NO asignés esa página. La lista puede quedar vacía, eso es correcto.
+CRITERIO SECUNDARIO — CUIL:
+Si la página nueva tiene un CUIL impreso, debe coincidir EXACTAMENTE con el CUIL del Ref. Un dígito distinto = no es el mismo → bloque: null.
 
-Para cada asignación incluí un campo "confianza" del 0 al 100. Solo incluí en la respuesta asignaciones con confianza >= 90. Si tenés 89 o menos → no la incluyas.
+PROHIBIDO:
+- No asignés si tenés dudas.
+- No busques similitudes parciales. Solo coincidencia exacta de tipo de formulario.
+- Si una página no coincide claramente con ningún Ref → bloque: null.
 
-Respondé SOLO JSON válido, sin markdown.
+Respondé SOLO JSON válido, sin markdown, sin texto extra:
 {
-  "asignaciones": [
-    {
-      "pagina_nueva": 1,
-      "bloque": "Ref 1",
-      "confianza": 95,
-      "meta": { "apellido": "", "cuil": "", "patente": "" }
-    }
+  "paginas": [
+    { "pagina_nueva": 1, "cuil_leido": "20-12345678-9", "bloque": "Ref 1" },
+    { "pagina_nueva": 2, "cuil_leido": "", "bloque": null }
   ]
 }`
   });
@@ -1477,11 +1469,7 @@ Respondé SOLO JSON válido, sin markdown.
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true"
     },
-    body: JSON.stringify({
-      model: modelo,
-      max_tokens: 2000,
-      messages: [{ role: "user", content }]
-    })
+    body: JSON.stringify({ model: modelo, max_tokens: 1500, messages: [{ role: "user", content }] })
   });
 
   if (!resp.ok) {
@@ -1493,44 +1481,76 @@ Respondé SOLO JSON válido, sin markdown.
   const textoResp = (json?.content?.[0]?.text || "").trim();
 
   let parsed = null;
-  try { parsed = JSON.parse(textoResp); }
-  catch {
+  // Claude ahora razona primero y pone el JSON al final en un bloque ```json ... ```
+  // Intentamos extraer ese bloque primero; si no, caemos en el JSON crudo
+  try {
+    const bloqueJson = textoResp.match(/```json\s*([\s\S]*?)```/i);
+    if (bloqueJson) {
+      parsed = JSON.parse(bloqueJson[1].trim());
+    } else {
+      parsed = JSON.parse(textoResp);
+    }
+  } catch {
     const m = textoResp.match(/\{[\s\S]*\}/);
     if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
   }
 
-  if (!parsed?.asignaciones?.length) return null;
+  if (!parsed?.paginas?.length) return null;
 
-  // Filtrar asignaciones con confianza baja (si Claude las incluyó igual)
-  const asignacionesValidas = parsed.asignaciones.filter(a => !a.confianza || a.confianza >= 90);
-  if (!asignacionesValidas.length) return null;
+  // El código hace el match fino: CUIL leído por Claude vs CUIL almacenado en cada bloque de referencia
+  const normCuil = (s) => String(s || "").replace(/\D/g, "");
 
-  // Convertir asignaciones a formato bloquesFinales [{nombre, paginas, requerimientos, meta}]
-  const bloquesMap = new Map();
-  for (const asig of asignacionesValidas) {
-    const nombreBloque = asig.bloque;
-    if (!nombreBloque) continue;
-    let refBloque = bloquesRef.find((b) => b.nombre === nombreBloque);
-    // Si Claude respondió "Ref 1", "Ref 2", etc., buscar por índice
-    if (!refBloque) {
-      const m = String(nombreBloque).match(/^Ref\s*(\d+)$/i);
-      if (m) {
-        const idx = parseInt(m[1]) - 1;
-        if (idx >= 0 && idx < bloquesRef.length) refBloque = bloquesRef[idx];
+  // Usamos el ÍNDICE en bloquesRef como clave única, porque todos los bloques pueden
+  // tener el mismo nombre (ej: "Bloque") cuando el usuario no los renombra en el modal.
+  // Indexar por nombre colapsaría bloques distintos en uno solo.
+  const bloquesMapIdx = new Map(); // key: índice en bloquesRef → { refBloque, paginas }
+
+  for (const item of parsed.paginas) {
+    if (!item.bloque || !item.pagina_nueva) continue;
+
+    // Resolver el bloque que indicó Claude → primero por nombre exacto, luego por "Ref N"
+    let refIdx = bloquesRef.findIndex((b) => b.nombre === item.bloque);
+    if (refIdx === -1) {
+      const mm = String(item.bloque).match(/^Ref\s*(\d+)$/i);
+      if (mm) {
+        const i = parseInt(mm[1]) - 1;
+        if (i >= 0 && i < bloquesRef.length) refIdx = i;
       }
     }
-    if (!bloquesMap.has(nombreBloque)) {
-      bloquesMap.set(nombreBloque, {
-        nombre: nombreBloque,
+    if (refIdx === -1) continue;
+    let refBloque = bloquesRef[refIdx];
+
+    // Validación por CUIL: si el CUIL leído no coincide con el bloque que indicó Claude,
+    // buscamos el bloque correcto por CUIL
+    const cuilLeido = normCuil(item.cuil_leido);
+    const cuilBloque = normCuil(refBloque.meta?.cuil);
+
+    if (cuilLeido && cuilBloque && cuilLeido !== cuilBloque) {
+      const corrIdx = bloquesRef.findIndex((b) => normCuil(b.meta?.cuil) === cuilLeido);
+      if (corrIdx !== -1) {
+        console.log(`[MAU] Pág ${item.pagina_nueva}: CUIL ${cuilLeido} reasignado de Ref ${refIdx+1} → Ref ${corrIdx+1} (${bloquesRef[corrIdx].meta?.apellido || ""})`);
+        refIdx = corrIdx;
+        refBloque = bloquesRef[corrIdx];
+      } else {
+        console.log(`[MAU] Pág ${item.pagina_nueva}: CUIL ${cuilLeido} no coincide con ningún bloque, descartando`);
+        continue;
+      }
+    }
+
+    console.log(`[MAU] Pág ${item.pagina_nueva} → Ref ${refIdx+1} "${refBloque.meta?.apellido || refBloque.nombre}" CUIL=${cuilLeido || "(sin cuil)"}`);
+    if (!bloquesMapIdx.has(refIdx)) {
+      bloquesMapIdx.set(refIdx, {
+        nombre: refBloque.nombre,
         paginas: [],
-        requerimientos: refBloque?.requerimientos || [],
-        meta: asig.meta?.cuil || asig.meta?.apellido ? asig.meta : (refBloque?.meta || {})
+        requerimientos: refBloque.requerimientos || [],
+        meta: { ...refBloque.meta }
       });
     }
-    if (asig.pagina_nueva) bloquesMap.get(nombreBloque).paginas.push(asig.pagina_nueva);
+    if (cuilLeido) bloquesMapIdx.get(refIdx).meta = { ...bloquesMapIdx.get(refIdx).meta, cuil: item.cuil_leido };
+    bloquesMapIdx.get(refIdx).paginas.push(item.pagina_nueva);
   }
 
-  const resultado = Array.from(bloquesMap.values()).filter((b) => b.paginas.length && b.requerimientos.length);
+  const resultado = Array.from(bloquesMapIdx.values()).filter((b) => b.paginas.length && b.requerimientos.length);
   return resultado.length ? resultado : null;
 }
 

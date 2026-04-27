@@ -157,16 +157,15 @@
     // Extraer contrato si aparece.
     const contratoMatch = textoCompleto.match(/Contrato[:\s]*(.+)/i);
     const contrato = contratoMatch ? contratoMatch[1].trim() : "";
-    // Separar apellido y nombre del empleado.
+    // Usar el nombre completo como apellido para poder desambiguar entre
+    // "FERNANDEZ DIEGO ARIEL" y "FERNANDEZ ENRIQUE DARIO" correctamente.
     let apellido = "";
     let nombre = "";
     if (nombreCompleto) {
-      const partes = nombreCompleto.trim().split(/\s+/);
-      apellido = partes[0] || "";
-      nombre = partes.slice(1).join(" ") || "";
+      apellido = nombreCompleto.trim(); // nombre completo, sin partir
+      nombre = "";
     } else {
-      // Fallback: extraer la primera palabra en mayúsculas del texto completo
-      // para tener al menos algo de apellido para desambiguar.
+      // Fallback: extraer palabras en mayúsculas del texto completo
       const primeraMayus = textoCompleto.match(/\b([A-ZÁÉÍÓÚÑ]{3,})\b/);
       if (primeraMayus) apellido = primeraMayus[1];
     }
@@ -1001,11 +1000,31 @@
     if (filasCoincidentes.length === 0) {
       const quitarPeriodo = (s) => (s || "").replace(/-\d{4}-\d+.*$/i, "").trim();
       const baseNombreReq = quitarPeriodo(nombreReq);
-      filasCoincidentes = estado.filas.filter(
+      // LOG DEBUG: mostrar TODAS las filas que contienen el base del requerimiento
+      const todasConBase = estado.filas.filter((f) => f.tipo === "requerimiento" && quitarPeriodo(f.requerimiento) === baseNombreReq);
+      console.log(`[MAU][DEBUG] Filas con base "${baseNombreReq}": ${todasConBase.length}`);
+      todasConBase.forEach((f, i) => console.log(`[MAU][DEBUG]   [${i}] req="${f.requerimiento}" recurso="${f.recurso?.apellido || '(vacío)'}" id=${f.id}`));
+      let candidatosFallback = estado.filas.filter(
         (f) => f.tipo === "requerimiento" && quitarPeriodo(f.requerimiento) === baseNombreReq
       );
+      // Si tenemos apellido forzado (o en metadata), preferir filas que tienen recurso con persona.
+      // Así evitamos caer en filas genéricas sin persona (recurso vacío).
+      const apellidoBusqueda = (apellidoForzado || metadata?.apellido || "").toLowerCase();
+      if (apellidoBusqueda && candidatosFallback.length > 1) {
+        const conRecurso = candidatosFallback.filter((f) => f.recurso?.apellido);
+        if (conRecurso.length > 0) candidatosFallback = conRecurso;
+      }
+      // Si hay filas con recurso pero ninguna coincide con el apellido, igualmente preferirlas
+      // sobre filas sin recurso (genéricas).
+      if (!apellidoBusqueda) {
+        const sinRecurso = candidatosFallback.filter((f) => !f.recurso?.apellido);
+        const conRecurso = candidatosFallback.filter((f) => f.recurso?.apellido);
+        if (conRecurso.length > 0) candidatosFallback = conRecurso;
+        else candidatosFallback = sinRecurso;
+      }
+      filasCoincidentes = candidatosFallback;
       if (filasCoincidentes.length > 0) {
-        console.log(`[MAU][ASIGNAR] Match por nombre base (sin período): "${baseNombreReq}" → ${filasCoincidentes.length} fila(s)`);
+        console.log(`[MAU][ASIGNAR] Match por nombre base (sin período): "${baseNombreReq}" → ${filasCoincidentes.length} fila(s) (con recurso preferidas)`);
       }
     }
 
@@ -1027,9 +1046,12 @@
       console.log(`[MAU][ASIGNAR] Única fila → id=${filaDestino.id}`);
     } else if (metadata && (metadata.apellido || metadata.cuil)) {
       // Múltiples filas con mismo nombre → usar metadata para elegir la correcta.
-      const metaApellido = (metadata.apellido || "").toLowerCase();
+      // Construir nombre completo: apellido + nombre (ej: "FERNANDEZ DIEGO ARIEL")
+      // para distinguir entre "FERNANDEZ ENRIQUE DARIO" y "FERNANDEZ DIEGO ARIEL".
+      const metaNombreCompleto = [metadata.apellido, metadata.nombre].filter(Boolean).join(" ").toLowerCase();
+      const metaApellido = metaNombreCompleto || (metadata.apellido || "").toLowerCase();
       const metaCuil = (metadata.cuil || "").replace(/\D/g, "");
-      console.log(`[MAU][ASIGNAR] Buscando por metadata: apellido="${metaApellido}", cuil="${metaCuil}"`);
+      console.log(`[MAU][ASIGNAR] Buscando por metadata: nombre="${metaApellido}", cuil="${metaCuil}"`);
       for (const f of filasCoincidentes) {
         if (!f.recurso) continue;
         const recApellido = (f.recurso.apellido || "").toLowerCase();
@@ -1040,7 +1062,7 @@
           console.log(`[MAU][ASIGNAR] Match CUIL exacto → id=${f.id}`);
           break;
         }
-        // 2) Match por apellido → preferir fila vacía sobre fila con archivo
+        // 2) Match por nombre completo → preferir fila vacía sobre fila con archivo
         if (metaApellido && recApellido && (recApellido.includes(metaApellido) || metaApellido.includes(recApellido))) {
           const esMejorQueActual = !filaDestino || (f.archivo == null && filaDestino.archivo != null);
           if (esMejorQueActual) {
