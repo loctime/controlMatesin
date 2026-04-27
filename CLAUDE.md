@@ -45,6 +45,11 @@ Extensión de Chrome (Manifest V3) que automatiza la subida de documentos PDF a 
 ### 1 sola llamada a Claude para matching
 Se usa 1 llamada donde Claude ve TODAS las referencias + TODAS las páginas nuevas. Claude lee el CUIL de cada página. El código valida CUIL y reasigna si Claude se equivocó de bloque.
 
+### Claude recibe TODAS las imágenes de cada bloque
+En `compararPaginasConReferencia`, por cada bloque de referencia se mandan a Claude TODAS las páginas que ese bloque tiene en el mapeo (no solo la primera). Esto es crítico para bloques con múltiples tipos de formulario (ej: recibo + VAR f.Desempleo). Claude debe poder reconocer cualquier formulario del bloque, no solo el tipo de la primera página.
+
+El campo `imagenesRef` (array) reemplaza a `base64Ref` (string único). El fallback a `imagenesPorBloque` (formato legacy, 1 sola imagen) se mantiene para compatibilidad.
+
 ### Clave del Map es el ÍNDICE, no el nombre
 Los bloques en el mapeo se llaman todos "Bloque" (nombre por defecto del modal). Si se usara el nombre como clave del Map, todos colapsarían. Se usa el índice en `bloquesRef` como clave.
 
@@ -68,13 +73,14 @@ En `asignarArchivoARequerimiento`, para elegir la fila correcta entre múltiples
 - No agregar llamadas extra a Claude por página (costo)
 - No cambiar el flujo de 1 llamada a multi-llamada
 - No confundir el CUIL del empleado (en el documento) con el CUIL del empleador (en las filas de CD, que es siempre el de Matesin)
-- NO agregar validación de cantidad de páginas (ej: "si encontró menos páginas que las del mapeo, descartar bloque") — esto descarta bloques válidos cuando el PDF tiene menos personas que la sábana original. EL MAPEO MANDA: si coincide visualmente, sube; si no coincide, no sube. Listas más cortas que el mapeo son válidas.
+- NO descartar bloques válidos de otras personas si una persona tiene páginas faltantes. La validación es POR BLOQUE, no global.
 - No agregar chain-of-thought al prompt de Claude para matching — empeora las asignaciones porque Claude se convence a sí mismo de cosas incorrectas. El prompt debe ser directo y simple.
 
 ## Reglas de negocio importantes
 - **El mapeo manda**: si una página coincide visualmente con un bloque del mapeo, se sube. Si no coincide, no se sube. No hay fallback por texto ni por tipo de documento.
 - **Listas cortas son válidas**: si el PDF tiene 3 personas de las 10 del mapeo, se suben esas 3. No es error.
-- **Si falta una página de un bloque**: si Claude no la encuentra visualmente, el bloque se sube igual con las páginas que encontró. No se cancela el bloque por páginas faltantes.
+- **Si falta una página de un bloque**: el bloque se DESCARTA completo. Si el mapeo dice que ese bloque tiene 3 páginas y solo se encontraron 2, no se sube nada de ese bloque. El usuario debe subir el PDF completo para ese bloque.
+- **La validación es por bloque, no global**: si MATESIN tiene las 3 páginas completas y FERNANDEZ solo tiene 2 de 3, MATESIN se sube igual y FERNANDEZ se descarta.
 - **CUIL como validación, no como matching principal**: Claude hace el match visual, el código valida/corrige con CUIL si hay discrepancia.
 
 ## Estado actual

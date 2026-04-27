@@ -644,7 +644,11 @@ async function tgManejarComando(cfg, texto) {
   // Confirmar / cancelar subida de sábana pendiente
   if (limpio === "si" || limpio === "sí" || limpio === "dale" || limpio === "ok") {
     try {
-      await tgConfirmarSubidaSabana(cfg);
+      // Primero intentar confirmar subida de documento; si no hay, intentar sábana
+      const manejadoComoDoc = await tgConfirmarSubidaDoc(cfg);
+      if (!manejadoComoDoc) {
+        await tgConfirmarSubidaSabana(cfg);
+      }
     } catch (e) {
       await tgEnviarMensaje(cfg.token, cfg.chatId, `❌ Error en la subida: ${escapeHtml(e.message || String(e))}`);
     }
@@ -1555,6 +1559,7 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
       bloquesMapIdx.set(refIdx, {
         nombre: refBloque.nombre,
         paginas: [],
+        paginasMapeo: (refBloque.paginas || []).length, // cuántas páginas tiene este bloque en el mapeo
         requerimientos: refBloque.requerimientos || [],
         meta: { ...refBloque.meta }
       });
@@ -1563,7 +1568,18 @@ Respondé SOLO JSON válido, sin markdown, sin texto extra:
     bloquesMapIdx.get(refIdx).paginas.push(item.pagina_nueva);
   }
 
-  const resultado = Array.from(bloquesMapIdx.values()).filter((b) => b.paginas.length && b.requerimientos.length);
+  // Validar que cada bloque encontrado tiene TODAS las páginas que dice el mapeo.
+  // Si falta alguna página, el bloque se descarta (el mapeo manda).
+  // Bloques de otras personas que sí están completos se suben igual (listas cortas son válidas).
+  const resultado = Array.from(bloquesMapIdx.values()).filter((b) => {
+    if (!b.paginas.length || !b.requerimientos.length) return false;
+    if (b.paginasMapeo > 0 && b.paginas.length < b.paginasMapeo) {
+      console.log(`[MAU] Bloque "${b.meta?.apellido || b.nombre}" descartado: encontradas ${b.paginas.length}/${b.paginasMapeo} páginas del mapeo`);
+      return false;
+    }
+    return true;
+  });
+
   return resultado.length ? resultado : null;
 }
 
@@ -2109,23 +2125,37 @@ async function tgDispararSubidaEnPanel(tabId, base64Pdf, fileName, bloquesPlan) 
         // procesarTodo no se await porque puede tardar mucho y bloquearía el sw.
         // En su lugar, lo lanzamos y polleamos el estado.filas.
         const promesaProc = P.procesarTodo();
-        // Esperar máximo 15 minutos
+
+        // Espera inicial: darle tiempo a procesarTodo para arrancar y poner
+        // la primera fila en "procesando" antes de que empecemos a verificar.
+        // Sin esto, el primer poll ve 0 filas procesando y sale prematuramente.
+        await wait(12000);
+
+        // Esperar máximo 15 minutos hasta que todas las filas lleguen a un estado terminal
         const tSub = Date.now();
         while (Date.now() - tSub < 900000) {
-          await wait(3000);
-          // Chequear si todavía hay filas en estado "procesando" o similar
-          const filasAhora = P.estado.filas || [];
-          const enProceso = filasAhora.some(f => f.estado === "procesando" || f.estado === "subiendo" || f.estado === "enviando");
-          if (!enProceso) {
-            // Esperar 5s extra para que terminen los borradores finales
-            await wait(5000);
+          await wait(4000);
+          const filasAhora = (P.estado.filas || []).filter(f => f.archivo);
+          // "en proceso" = todavía hay filas activas o sin empezar
+          const enProceso = filasAhora.some(f => {
+            const est = String(f.estado || "").toLowerCase();
+            return est === "procesando" || est === "subiendo" || est === "enviando" || est === "pendiente" || est === "";
+          });
+          // Salir solo cuando haya al menos un resultado terminal Y nadie en proceso
+          const hayTerminal = filasAhora.some(f => {
+            const est = String(f.estado || "").toLowerCase();
+            return est === "ok" || est === "enviado" || est === "subido" || est === "completo" || est.startsWith("error");
+          });
+          if (!enProceso && hayTerminal) {
+            await wait(4000); // pausa extra para borradores finales
             break;
           }
         }
+
         // Esperar a que la promesa termine (con timeout)
         await Promise.race([
           promesaProc.catch(() => {}),
-          new Promise(r => setTimeout(r, 10000))
+          new Promise(r => setTimeout(r, 15000))
         ]);
       } catch (e) {
         return { ok: false, error: "Falló procesarTodo: " + (e.message || e) };
@@ -2156,6 +2186,82 @@ async function tgDispararSubidaEnPanel(tabId, base64Pdf, fileName, bloquesPlan) 
     args: [base64Pdf, fileName, bloquesPlan]
   });
   return result || { ok: false, error: "executeScript no devolvió resultado" };
+}
+
+/**
+ * Handler cuando el usuario manda "SI" después del preview de un documento.
+ * Devuelve true si había un doc pendiente (lo manejó), false si no había nada.
+ */
+async function tgConfirmarSubidaDoc(cfg) {
+  const data = await chrome.storage.local.get("matesin_tg_pendiente_doc");
+  const pendiente = data.matesin_tg_pendiente_doc;
+  if (!pendiente?.fileId || !pendiente?.bloques?.length) return false;
+
+  const log = (txt) => tgEnviarMensaje(cfg.token, cfg.chatId, txt).catch(e => console.warn("[MAU] log fail", e));
+  const t0 = Date.now();
+
+  await log(`🚀 Subiendo <b>${escapeHtml(pendiente.nombreArchivo)}</b>…\n⏳ Re-bajando el PDF de Telegram…`);
+
+  let base64;
+  try {
+    const r = await tgBajarArchivo(cfg.token, pendiente.fileId);
+    base64 = r.base64;
+  } catch (e) {
+    await log(`❌ No pude re-bajar el archivo: ${escapeHtml(e.message || String(e))}`);
+    return true;
+  }
+
+  let tabId;
+  try {
+    const tab = await tgConseguirTabBandeja();
+    tabId = tab.tabId;
+  } catch (e) {
+    await log(`❌ Necesitás una pestaña de controldocumentario.com abierta.`);
+    return true;
+  }
+
+  await log(`✅ Bandeja abierta.\n⏳ Subiendo archivos…`);
+
+  let res;
+  try {
+    res = await tgDispararSubidaEnPanel(tabId, base64, pendiente.nombreArchivo, pendiente.bloques);
+  } catch (e) {
+    await log(`❌ Falló al subir: ${escapeHtml(e.message || String(e))}`);
+    return true;
+  }
+
+  // Limpiar pendiente
+  try { await chrome.storage.local.remove("matesin_tg_pendiente_doc"); } catch {}
+
+  const tTotal = Math.round((Date.now() - t0) / 1000);
+
+  if (!res.ok) {
+    await log(`⚠️ La subida no se pudo completar:\n<i>${escapeHtml(res.error || "Razón desconocida")}</i>`);
+    return true;
+  }
+
+  // Armar lista de personas de los bloques subidos
+  const personas = (pendiente.bloques || []).map(b => b.meta?.apellido || "").filter(Boolean);
+
+  if (res.errCount === 0) {
+    const lineasOk = personas.map(p => `✅ Requerimiento encontrado y subido para <b>${escapeHtml(p)}</b>`);
+    await log(
+      `✅ <b>Todos los archivos fueron subidos correctamente</b> en ${tTotal}s.\n\n` +
+      lineasOk.join("\n")
+    );
+  } else {
+    const partes = [
+      `⚠️ <b>Subida completada con errores</b> en ${tTotal}s.`,
+      `📊 ${res.okCount} OK · ${res.errCount} con error · ${res.totalCount} total`,
+      ""
+    ];
+    for (const e of (res.errores || []).slice(0, 10)) {
+      partes.push(`❌ ${escapeHtml(e)}`);
+    }
+    await log(partes.join("\n"));
+  }
+
+  return true;
 }
 
 /**
@@ -2358,22 +2464,32 @@ async function tgManejarDocumento(cfg, doc) {
       return;
     }
 
-    // 6) Asignar y subir
-    await log(`✅ Macheó. Asignando y subiendo…`);
-    let res;
-    try {
-      res = await tgDispararSubidaEnPanel(tabId, base64, nombreArchivo, bloquesFinales);
-    } catch (e) {
-      await log(`❌ Falló al subir: ${escapeHtml(e.message || String(e))}`);
-      return;
-    }
+    // 6) Guardar pendiente y pedir confirmación al usuario
+    await chrome.storage.local.set({
+      matesin_tg_pendiente_doc: {
+        fileId,
+        nombreArchivo,
+        bloques: bloquesFinales,
+        guardadoEn: Date.now()
+      }
+    });
 
-    if (!res.ok) {
-      await log(`⚠️ La subida no se completó:\n${escapeHtml(res.error || "Razón desconocida")}`);
-    } else {
-      const tTotal = ((Date.now() - t0) / 1000).toFixed(1);
-      await log(`✅ <b>Listo</b> en ${tTotal}s. ${res.okCount} asignado(s) correctamente.`);
-    }
+    // Armar resumen de coincidencias para mostrar al usuario
+    const lineasResumen = bloquesFinales.map(b => {
+      const persona = b.meta?.apellido || "Sin nombre";
+      const nPagsDoc = (b.paginas || []).length;
+      const nPagsMapeo = b.paginasMapeo || nPagsDoc;
+      return (
+        `👤 <b>${escapeHtml(persona)}</b>\n` +
+        `   Bloque original: ${nPagsMapeo} pág${nPagsMapeo !== 1 ? "s" : ""}. · Tu documento: ${nPagsDoc} pág${nPagsDoc !== 1 ? "s" : ""}. ✅ Macheado correctamente`
+      );
+    });
+
+    await log(
+      `✅ Coincidencia${bloquesFinales.length > 1 ? "s" : ""} encontrada${bloquesFinales.length > 1 ? "s" : ""}:\n\n` +
+      lineasResumen.join("\n\n") +
+      `\n\n¿Lo subimos? Respondé <b>SI</b> para confirmar.`
+    );
 
   } finally {
     if (abrimosNosotros) {
