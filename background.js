@@ -1401,17 +1401,21 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
 
   const { apiKey, modelo } = await obtenerApiKeyYModelo();
 
-  // Obtener imagen de referencia por bloque
+  // Obtener TODAS las imágenes de referencia por bloque (una por cada página del bloque)
   const bloquesRef = referencia.bloques.map((b) => {
-    let base64Ref = null;
-    if (referencia.imagenesPorBloque && referencia.imagenesPorBloque[b.nombre]) {
-      base64Ref = referencia.imagenesPorBloque[b.nombre];
-    } else if (Array.isArray(referencia.imagenes)) {
-      const primeraPag = (b.paginas || [])[0];
-      const img = referencia.imagenes.find((i) => i.pagina === primeraPag);
-      if (img) base64Ref = img.base64;
+    let imagenesRef = [];
+    if (Array.isArray(referencia.imagenes) && referencia.imagenes.length > 0) {
+      // Buscamos la imagen de cada página asignada a este bloque en el mapeo
+      imagenesRef = (b.paginas || []).map(pNum => {
+        const img = referencia.imagenes.find((i) => i.pagina === pNum);
+        return img ? img.base64 : null;
+      }).filter(Boolean);
     }
-    return base64Ref ? { ...b, base64Ref } : null;
+    // Fallback: imagenesPorBloque (formato legacy, 1 sola imagen por bloque)
+    if (imagenesRef.length === 0 && referencia.imagenesPorBloque && referencia.imagenesPorBloque[b.nombre]) {
+      imagenesRef = [referencia.imagenesPorBloque[b.nombre]];
+    }
+    return imagenesRef.length > 0 ? { ...b, imagenesRef } : null;
   }).filter(Boolean);
 
   if (!bloquesRef.length) return null;
@@ -1419,13 +1423,16 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
   // ── 1 sola llamada: Claude extrae tipo + CUIL de cada página, el código hace el match ──
   const content = [];
 
-  // Mostrar referencias con su CUIL explícito en texto (no hace falta que Claude lo lea de la imagen)
-  content.push({ type: "text", text: "BLOQUES DE REFERENCIA (tipo de formulario + CUIL del empleado):\n" });
+  // Mostrar referencias con TODAS sus páginas para que Claude reconozca cada tipo de formulario del bloque
+  content.push({ type: "text", text: "BLOQUES DE REFERENCIA (todas las páginas del bloque, con CUIL del empleado):\n" });
   bloquesRef.forEach((b, idx) => {
     const cuil = b.meta?.cuil ? `CUIL: ${b.meta.cuil}` : "CUIL: (no registrado)";
     const apellido = b.meta?.apellido || "";
-    content.push({ type: "text", text: `\nRef ${idx + 1}: ${apellido} — ${cuil}` });
-    content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b.base64Ref } });
+    content.push({ type: "text", text: `\nRef ${idx + 1}: ${apellido} — ${cuil} (${b.imagenesRef.length} tipo(s) de formulario en este bloque)` });
+    b.imagenesRef.forEach((imgBase64, pIdx) => {
+      content.push({ type: "text", text: `  Formulario ${pIdx + 1} de Ref ${idx + 1}:` });
+      content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imgBase64 } });
+    });
   });
 
   // Páginas nuevas
@@ -1439,13 +1446,13 @@ async function compararPaginasConReferencia(nuevasPaginas, referencia) {
     type: "text",
     text: `
 
-TAREA: para cada página nueva, encontrá el Ref que es VISUALMENTE IDÉNTICO en estructura y tipo de formulario.
+TAREA: para cada página nueva, encontrá el Ref al que pertenece visualmente.
 
-CRITERIO PRINCIPAL — comparación visual estricta:
-La página nueva debe verse igual que la imagen del Ref: mismo título, mismo layout, mismos logos, misma estructura de secciones. Si visualmente no coinciden → bloque: null.
+CRITERIO PRINCIPAL — comparación visual:
+Cada Ref tiene uno o más formularios (Formulario 1, Formulario 2, etc.). Una página nueva pertenece a un Ref si se ve igual que CUALQUIERA de los formularios de ese Ref: mismo título, mismo layout, mismos logos, misma estructura. Si no coincide con ningún formulario de ningún Ref → bloque: null.
 
 CRITERIO SECUNDARIO — CUIL:
-Si la página nueva tiene un CUIL impreso, debe coincidir EXACTAMENTE con el CUIL del Ref. Un dígito distinto = no es el mismo → bloque: null.
+Si la página nueva tiene un CUIL impreso, debe coincidir con el CUIL del Ref asignado. Un dígito distinto = no es el mismo → bloque: null.
 
 PROHIBIDO:
 - No asignés si tenés dudas.
