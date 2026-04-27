@@ -84,11 +84,15 @@ En `asignarArchivoARequerimiento`, para elegir la fila correcta entre múltiples
 - **CUIL como validación, no como matching principal**: Claude hace el match visual, el código valida/corrige con CUIL si hay discrepancia.
 
 ## Estado actual
-- Matching por imagen + CUIL: funcionando
+- Matching por imagen + CUIL: funcionando ✓
 - Asignación por persona (apellido completo): funcionando ✓ (FERNANDEZ DIEGO vs FERNANDEZ ENRIQUE resuelto)
-- Telegram: mismo flujo que local
+- Telegram: funcionando ✓ — flujo completo con confirmación antes de subir y resultado real al terminar
+- Claude recibe TODAS las imágenes de referencia por bloque: funcionando ✓ (páginas desordenadas reconocidas)
+- CUIL del empleador no descarta páginas: funcionando ✓ (confía en match visual cuando el CUIL no es de ningún empleado)
+- Validación por bloque: bloques incompletos se descartan, bloques completos se suben ✓
 - Vehículos: usan patente como identificador (no apellido), funciona aparte
 - Log debug en panel.js (`[MAU][DEBUG]`): hay logs temporales de diagnóstico que se pueden limpiar
+- Log diagnóstico en background.js (`[MAU] Ref X ... imagen(es)`): logs temporales de diagnóstico que se pueden limpiar
 
 ## Para continuar
 Si algo no funciona, pedir los logs del DevTools:
