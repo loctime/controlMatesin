@@ -59,6 +59,30 @@ En panel.js, `parsearRecurso()` extrae el nombre completo del empleado (ej: "FER
 ### Matching de persona usa apellido + nombre
 En `asignarArchivoARequerimiento`, para elegir la fila correcta entre múltiples personas con el mismo apellido, se construye `metaNombreCompleto = apellido + " " + nombre` desde la metadata del bloque.
 
+## Documentos opcionales — cómo manejarlos
+
+Los PDFs que se suben en Trabajar NO necesitan tener siempre los mismos documentos. Algunos formularios vienen a veces y otros no (ej: DNI no siempre se carga, hay docs mensuales que no siempre coinciden en fecha).
+
+**Regla clave**: la cantidad total de páginas del PDF no necesita coincidir con la sábana de referencia. Lo que sí tiene que coincidir es que **cada bloque tenga todas sus páginas completas**. Si un bloque tiene 2 páginas en el mapeo, tienen que venir las 2 o ese bloque se descarta.
+
+**Para documentos opcionales** (como DNI, que a veces viene y a veces no): mapearlos como un **bloque separado**, no dentro del bloque del recibo u otro doc. Así:
+- Si viene → ese bloque se sube
+- Si no viene → ese bloque se saltea, los demás bloques siguen subiendo
+
+### Agregar un formulario nuevo al mapeo (flujo mejorado)
+
+**Cambio aplicado en panel.js** (`abrirGestorMapeo`): cuando se abre el modal de Aprender eligiendo un patrón existente como base, los bloques cargan **sin páginas asignadas** (solo con nombre y requerimiento). Antes cargaban con los números de página del PDF viejo, lo que confundía al usuario.
+
+**Cómo agregar un formulario nuevo hoy:**
+1. Preparar un PDF de referencia que incluya todos los docs (viejos + nuevo)
+2. Abrir Aprender y subir ese PDF
+3. Elegir el patrón existente → los bloques cargan con nombres/reqs pero sin páginas
+4. Asignar las páginas a cada bloque en el modal (incluyendo las del formulario nuevo)
+5. Si el formulario nuevo es opcional, crearlo como un bloque separado
+6. Confirmar → el patrón se actualiza, la memoria existente queda intacta
+
+**Este cambio NO afecta Trabajar, Telegram, ni el matching visual. Solo cambia la UI de Aprender.**
+
 ## Bugs resueltos (no volver atrás)
 - Bloques colapsaban en Map por nombre genérico "Bloque" → usar índice como clave
 - parsearRecurso devolvía solo primera palabra → ahora nombre completo
